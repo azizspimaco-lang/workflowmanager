@@ -13,6 +13,16 @@
         Identifiants incorrects. Réessaie.
       </div>
     {% endif %}
+    {% if request.query_params.get("setup") == "ok" %}
+      <div class="alert success" style="margin-bottom:12px;">
+        Compte créé avec succès. Connecte-toi maintenant.
+      </div>
+    {% endif %}
+    {% if request.query_params.get("setup") == "locked" %}
+      <div class="alert error" style="margin-bottom:12px;">
+        Le mode setup est verrouillé dès qu'au moins un utilisateur existe.
+      </div>
+    {% endif %}
 
     <form class="login-form" method="post" action="/login">
       <div class="form-group">
@@ -31,6 +41,7 @@
 
       <div class="muted" style="margin-top:10px; text-align:center;">
         Astuce : si tu oublies l’accès, modifie <b>BOOTSTRAP_USER1</b> et <b>BOOTSTRAP_PASS1</b> puis redeploy.
+        Si aucun utilisateur n'existe encore, passe par <a href="/setup">/setup</a>.
       </div>
     </form>
 

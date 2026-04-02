@@ -37,6 +37,17 @@ from passlib.hash import bcrypt, pbkdf2_sha256
 from openai import OpenAI
 import pypdfium2 as pdfium
 
+PDF_TEXT_READER = None
+try:
+    from pypdf import PdfReader as _PdfReader  # type: ignore
+    PDF_TEXT_READER = _PdfReader
+except Exception:
+    try:
+        from PyPDF2 import PdfReader as _PdfReader  # type: ignore
+        PDF_TEXT_READER = _PdfReader
+    except Exception:
+        PDF_TEXT_READER = None
+
 # PDF merge (pypdf/PyPDF2) - import robuste
 PDF_MERGER_AVAILABLE = False
 PdfMerger = None
@@ -430,7 +441,11 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "static"), exist_ok=True)
+
+OPENAI_API_KEY = (os.environ.get("OPENAI_API_KEY") or "").strip()
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "1") == "1"
 
@@ -449,6 +464,212 @@ def format_mad(value: Optional[float]) -> str:
 
 
 templates.env.filters["mad"] = format_mad
+
+
+def _openai_enabled() -> bool:
+    return bool(openai_client and OPENAI_API_KEY)
+
+
+def _json_loads_safe(raw: Optional[str]) -> Optional[dict]:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _extract_output_text(resp) -> Optional[str]:
+    raw = getattr(resp, "output_text", None)
+    if raw:
+        return raw
+    parts = []
+    for item in (getattr(resp, "output", None) or []):
+        for c in (getattr(item, "content", None) or []):
+            if getattr(c, "type", None) in ("output_text", "text") and getattr(c, "text", None):
+                parts.append(c.text)
+    joined = "\n".join(parts).strip()
+    return joined or None
+
+
+def _call_openai_json(*, model: str, input_payload: list, schema_name: str, schema: dict, max_output_tokens: int = 1200) -> dict:
+    if not _openai_enabled():
+        raise RuntimeError("OPENAI indisponible")
+    resp = openai_client.responses.create(
+        model=model,
+        input=input_payload,
+        text={"format": {"type": "json_schema", "name": schema_name, "schema": schema, "strict": True}},
+        max_output_tokens=max_output_tokens,
+    )
+    raw = _extract_output_text(resp)
+    data = _json_loads_safe(raw)
+    if not data:
+        raise RuntimeError("Réponse OpenAI vide ou invalide")
+    return data
+
+
+def _read_pdf_text_safe(file_path: str) -> str:
+    if not PDF_TEXT_READER:
+        return ""
+    try:
+        reader = PDF_TEXT_READER(file_path)
+        parts = []
+        for page in getattr(reader, "pages", [])[:5]:
+            try:
+                parts.append(page.extract_text() or "")
+            except Exception:
+                pass
+        return "\n".join(parts).strip()
+    except Exception:
+        return ""
+
+
+def _read_text_hints(file_path: str, original_mime: str) -> str:
+    mime = (original_mime or "").lower()
+    path = file_path.lower()
+    if mime == "application/pdf" or path.endswith(".pdf"):
+        txt = _read_pdf_text_safe(file_path)
+        if txt:
+            return txt
+    try:
+        with open(file_path, "rb") as f:
+            blob = f.read(200000)
+        return blob.decode("utf-8", "ignore")
+    except Exception:
+        return ""
+
+
+def _first_match(text_value: str, patterns: list[str]) -> Optional[str]:
+    for pat in patterns:
+        m = re.search(pat, text_value, re.I | re.M)
+        if m:
+            for g in m.groups():
+                if g:
+                    return g.strip()
+            return m.group(0).strip()
+    return None
+
+
+def _parse_amount_guess(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    s = str(value).strip()
+    s = re.sub(r"[^0-9,\.\-]", "", s)
+    if not s:
+        return None
+    if s.count(",") and s.count("."):
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif s.count(",") and not s.count("."):
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def _guess_currency(text_value: str) -> str:
+    t = (text_value or "").upper()
+    if "EUR" in t or "€" in t:
+        return "EUR"
+    if "USD" in t or "US$" in t or "$" in t:
+        return "USD"
+    return "MAD"
+
+
+def _guess_supplier_name(text_value: str, file_path: str) -> Optional[str]:
+    lines = [ln.strip() for ln in (text_value or "").splitlines() if ln.strip()]
+    for ln in lines[:12]:
+        if len(ln) > 3 and len(ln) < 120 and not re.search(r"(facture|invoice|bon de|relev|page|date)", ln, re.I):
+            if re.search(r"[A-Za-zÀ-ÿ]", ln):
+                return ln[:200]
+    stem = pathlib.Path(file_path).stem.replace("_", " ").replace("-", " ").strip()
+    return stem[:200] if stem else None
+
+
+def _fallback_extract_doc_data(file_path: str, original_mime: str, *, detailed_invoice: bool = False, rib_mode: bool = False) -> dict:
+    text_value = _read_text_hints(file_path, original_mime)
+    upper = text_value.upper()
+    stem = pathlib.Path(file_path).stem
+
+    invoice_no = _first_match(text_value, [
+        r"(?:FACTURE|INVOICE|FACT|N[°ºO]?\s*FACTURE)\s*[:#-]?\s*([A-Z0-9\-_/]{3,})",
+        r"\b(?:FAC|INV)[-_ ]?([A-Z0-9\-_/]{3,})\b",
+    ])
+    bc_no = _first_match(text_value, [
+        r"(?:BON\s+DE\s+COMMANDE|\bBC\b)\s*[:#-]?\s*([A-Z0-9\-_/]{2,})",
+    ])
+    br_no = _first_match(text_value, [
+        r"(?:BON\s+DE\s+R[ÉE]CEPTION|BON\s+DE\s+LIVRAISON|\bBR\b|\bBL\b)\s*[:#-]?\s*([A-Z0-9\-_/]{2,})",
+    ])
+    date_guess = _first_match(text_value, [
+        r"\b(20\d{2}[/-]\d{2}[/-]\d{2})\b",
+        r"\b(\d{2}[/-]\d{2}[/-]20\d{2})\b",
+    ])
+    amount_guess = _parse_amount_guess(_first_match(text_value, [
+        r"(?:TOTAL\s*TTC|NET\s*[ÀA]\s*PAYER|GRAND\s*TOTAL)\s*[: ]*([0-9\s.,]+)",
+        r"(?:MONTANT\s*TTC)\s*[: ]*([0-9\s.,]+)",
+    ]))
+    terms_guess = _parse_amount_guess(_first_match(text_value, [r"(\d{1,3})\s*(?:jours|j)\b"]))
+    supplier_guess = _guess_supplier_name(text_value, file_path)
+    currency_guess = _guess_currency(text_value)
+
+    doc_type = "AUTRE"
+    if invoice_no or re.search(r"(FACTURE|INVOICE)", upper):
+        doc_type = "FACTURE"
+    elif bc_no or re.search(r"(BON\s+DE\s+COMMANDE|\bBC\b)", upper):
+        doc_type = "BC"
+    elif br_no or re.search(r"(BON\s+DE\s+R[ÉE]CEPTION|BON\s+DE\s+LIVRAISON|\bBR\b|\bBL\b)", upper):
+        doc_type = "BR"
+
+    if rib_mode:
+        return {
+            "beneficiary_name": supplier_guess,
+            "bank_name": _first_match(text_value, [r"(?:BANQUE|BANK)\s*[: -]?\s*([A-ZÀ-ÿ0-9 \-]{3,60})"]),
+            "rib_or_iban": _first_match(text_value, [r"\b([A-Z]{2}\d{2}[A-Z0-9]{11,30})\b", r"\b(\d{20,30})\b"]),
+            "swift": _first_match(text_value, [r"\b([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b"]),
+        }
+
+    base_data = {
+        "doc_type": doc_type,
+        "supplier_name": supplier_guess,
+        "supplier_ice": _first_match(text_value, [r"\bICE\s*[:#-]?\s*(\d{6,20})\b"]),
+        "supplier_if": _first_match(text_value, [r"\bIF\s*[:#-]?\s*(\d{3,20})\b"]),
+        "supplier_rc": _first_match(text_value, [r"\bRC\s*[:#-]?\s*([A-Z0-9\-_/]{2,30})\b"]),
+        "supplier_rc_city": None,
+        "supplier_address": None,
+        "invoice_no": invoice_no,
+        "invoice_date": date_guess,
+        "amount_ttc": amount_guess,
+        "currency": currency_guess,
+        "payment_terms_days": int(terms_guess) if terms_guess is not None else None,
+        "bc_no": bc_no,
+        "bc_date": date_guess if doc_type == "BC" else None,
+        "br_no": br_no,
+        "br_date": date_guess if doc_type == "BR" else None,
+        "service_date": date_guess if doc_type == "BR" else None,
+    }
+    if detailed_invoice:
+        base_data.update({
+            "amount_ht": None,
+            "vat_rate": None,
+            "amount_vat": None,
+            "department": None,
+            "analytic": None,
+            "nature_operation": "SERVICES" if re.search(r"SERVICE", upper) else "BIENS",
+            "due_date": None,
+            "due_date_planned": None,
+            "due_date_agreed": None,
+        })
+    return base_data
+
+
+def _invoice_completion_snapshot(inv: Invoice) -> dict:
+    flags = _invoice_quality_flags(inv)
+    score = max(0, 100 - 20 * len(flags))
+    return {"score": score, "missing": flags}
 
 
 def _slugify_filename(s: str, maxlen: int = 80) -> str:
@@ -489,17 +710,23 @@ def get_current_user(request: Request, session: Session) -> User | None:
     return session.get(User, uid_int)
 
 
+
 def ensure_bootstrap_users(session: Session):
     u1 = (os.environ.get("BOOTSTRAP_USER1") or "").strip()
     p1 = (os.environ.get("BOOTSTRAP_PASS1") or "")
     u2 = (os.environ.get("BOOTSTRAP_USER2") or "").strip()
     p2 = (os.environ.get("BOOTSTRAP_PASS2") or "")
 
+    existing_users = session.exec(select(User)).all()
     pairs: list[tuple[str, str]] = []
     if u1 and p1:
         pairs.append((u1, p1))
     if u2 and p2:
         pairs.append((u2, p2))
+
+    # Bootstrap de secours pour éviter un verrouillage complet après déploiement initial.
+    if not existing_users and not pairs:
+        pairs.append(("admin", "admin123"))
 
     for username, password in pairs:
         existing = session.exec(select(User).where(User.username == username)).first()
@@ -511,6 +738,7 @@ def ensure_bootstrap_users(session: Session):
             session.add(existing)
 
     session.commit()
+
 
 
 @app.on_event("startup")
@@ -528,7 +756,42 @@ def on_startup():
         ensure_bootstrap_users(session)
 
 
-PUBLIC_PATHS = {"/login", "/health", "/version", "/docs", "/openapi.json", "/redoc"}
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request, session: Session = Depends(get_session)):
+    users = session.exec(select(User).order_by(User.username.asc())).all()
+    can_bootstrap = len(users) == 0
+    return templates.TemplateResponse(
+        "setup.html",
+        {
+            "request": request,
+            "user": None,
+            "users": users,
+            "can_bootstrap": can_bootstrap,
+        },
+    )
+
+
+@app.post("/setup/create_user")
+def setup_create_user(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    users = session.exec(select(User)).all()
+    if users:
+        return RedirectResponse("/login?setup=locked", status_code=303)
+
+    uname = (username or "").strip()
+    if not uname or not password:
+        return RedirectResponse("/setup?err=1", status_code=303)
+
+    session.add(User(username=uname[:80], password_hash=hash_password(password)))
+    session.commit()
+    return RedirectResponse("/login?setup=ok", status_code=303)
+
+
+PUBLIC_PATHS = {"/login", "/health", "/version", "/docs", "/openapi.json", "/redoc", "/setup", "/setup/create_user"}
 PUBLIC_PREFIXES = ("/static", "/uploads")
 
 
@@ -554,6 +817,23 @@ async def auth_guard(request: Request, call_next):
 @app.get("/version", response_class=PlainTextResponse)
 def version():
     return APP_VERSION
+
+
+@app.get("/system/status")
+def system_status(request: Request, session: Session = Depends(get_session)):
+    _ = get_current_user(request, session)
+    users_count = len(session.exec(select(User)).all())
+    invoices_count = len(session.exec(select(Invoice)).all())
+    return JSONResponse(
+        content={
+            "version": APP_VERSION,
+            "openai_enabled": _openai_enabled(),
+            "database": engine.dialect.name,
+            "users_count": users_count,
+            "invoices_count": invoices_count,
+            "upload_dir": UPLOAD_DIR,
+        }
+    )
 
 
 @app.get("/health", response_class=PlainTextResponse)
@@ -813,9 +1093,10 @@ def _merge_paths_to_one_pdf_bytes(paths: list[str]) -> bytes:
 
 # ---------------- OPENAI EXTRACT ----------------
 
+
 def extract_invoice_with_openai(file_path: str, original_mime: str) -> dict:
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY manquant")
+    if not _openai_enabled():
+        return _fallback_extract_doc_data(file_path, original_mime, detailed_invoice=True)
 
     if original_mime == "application/pdf" or file_path.lower().endswith(".pdf"):
         img_bytes = _pdf_first_page_to_png_bytes(file_path)
@@ -865,56 +1146,44 @@ def extract_invoice_with_openai(file_path: str, original_mime: str) -> dict:
         ],
     }
 
-    resp = openai_client.responses.create(
-        model="gpt-4o",
-        input=[
-            {
-                "role": "system",
-                "content": (
-                    "Tu es un expert en lecture de factures (Maroc/FR). "
-                    "Retourne STRICTEMENT un JSON conforme au schéma (pas de texte). "
-                    "Priorité montants: TOTAL TTC / NET A PAYER / GRAND TOTAL. "
-                    "Dates au format YYYY-MM-DD. Si absent: null. "
-                    "Identifiants fournisseur: ICE, IF, RC si visibles."
-                ),
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": (
-                            "Extrait les champs demandés.\n"
-                            "- amount_ttc = TOTAL TTC / NET A PAYER / GRAND TOTAL.\n"
-                            "- amount_ht, amount_vat et vat_rate si visibles.\n"
-                            "- service_date = date livraison/service fait si visible.\n"
-                            "- payment_terms_days si une mention de délai existe (30j, 60j...).\n"
-                            "Si non visible: null."
-                        ),
-                    },
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            },
-        ],
-        text={"format": {"type": "json_schema", "name": "invoice_extract_v2", "schema": schema, "strict": True}},
-        max_output_tokens=600,
-    )
-
-    raw = getattr(resp, "output_text", None)
-    if not raw:
-        parts = []
-        for item in (getattr(resp, "output", None) or []):
-            for c in (getattr(item, "content", None) or []):
-                if getattr(c, "type", None) in ("output_text", "text") and getattr(c, "text", None):
-                    parts.append(c.text)
-        raw = "\n".join(parts).strip() if parts else None
-
-    if not raw:
-        raise RuntimeError("Réponse OpenAI vide (pas de JSON)")
-
-    return json.loads(raw)
-
-
+    try:
+        return _call_openai_json(
+            model="gpt-4o",
+            input_payload=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Tu es un expert en lecture de factures (Maroc/FR). "
+                        "Retourne STRICTEMENT un JSON conforme au schéma (pas de texte). "
+                        "Priorité montants: TOTAL TTC / NET A PAYER / GRAND TOTAL. "
+                        "Dates au format YYYY-MM-DD. Si absent: null. "
+                        "Identifiants fournisseur: ICE, IF, RC si visibles."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Extrait les champs demandés.\n"
+                                "- amount_ttc = TOTAL TTC / NET A PAYER / GRAND TOTAL.\n"
+                                "- amount_ht, amount_vat et vat_rate si visibles.\n"
+                                "- service_date = date livraison/service fait si visible.\n"
+                                "- payment_terms_days si une mention de délai existe (30j, 60j...).\n"
+                                "Si non visible: null."
+                            ),
+                        },
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                },
+            ],
+            schema_name="invoice_extract_v2",
+            schema=schema,
+            max_output_tokens=1200,
+        )
+    except Exception:
+        return _fallback_extract_doc_data(file_path, original_mime, detailed_invoice=True)
 def _safe_store_upload(content: bytes, original_name: str) -> str:
     ts = int(datetime.now().timestamp())
     original = original_name or "upload"
@@ -925,7 +1194,11 @@ def _safe_store_upload(content: bytes, original_name: str) -> str:
     return safe_name
 
 
+
 def extract_doc_bundle_with_openai(file_path: str, original_mime: str) -> dict:
+    if not _openai_enabled():
+        return _fallback_extract_doc_data(file_path, original_mime, detailed_invoice=False)
+
     if original_mime == "application/pdf" or file_path.lower().endswith(".pdf"):
         img_bytes = _pdf_first_page_to_png_bytes(file_path)
         img_mime = "image/png"
@@ -962,63 +1235,50 @@ def extract_doc_bundle_with_openai(file_path: str, original_mime: str) -> dict:
             "doc_type",
             "supplier_name", "supplier_ice", "supplier_if", "supplier_rc", "supplier_rc_city", "supplier_address",
             "invoice_no", "invoice_date", "amount_ttc", "currency", "payment_terms_days",
-            "bc_no", "bc_date",
-            "br_no", "br_date", "service_date",
+            "bc_no", "bc_date", "br_no", "br_date", "service_date",
         ],
     }
 
-    resp = openai_client.responses.create(
-        model="gpt-4o",
-        input=[
-            {
-                "role": "system",
-                "content": (
-                    "Tu es un assistant ERP. "
-                    "1) Identifie le type du document: FACTURE, BC (bon de commande), BR (bon de réception), AUTRE. "
-                    "2) Extrait les champs si visibles. "
-                    "Retourne STRICTEMENT un JSON conforme au schéma."
-                ),
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": (
-                            "Classe le document et extrait les champs.\n"
-                            "Règles:\n"
-                            "- FACTURE: invoice_no, invoice_date, amount_ttc, devise, fournisseur.\n"
-                            "- BC: bc_no, bc_date, fournisseur.\n"
-                            "- BR: br_no, br_date ou service_date (livraison/réception).\n"
-                            "Si absent => null."
-                        ),
-                    },
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            },
-        ],
-        text={"format": {"type": "json_schema", "name": "doc_bundle_extract_v1", "schema": schema, "strict": True}},
-        max_output_tokens=600,
-    )
-
-    raw = getattr(resp, "output_text", None)
-    if not raw:
-        parts = []
-        for item in (getattr(resp, "output", None) or []):
-            for c in (getattr(item, "content", None) or []):
-                if getattr(c, "type", None) in ("output_text", "text") and getattr(c, "text", None):
-                    parts.append(c.text)
-        raw = "\n".join(parts).strip() if parts else None
-
-    if not raw:
-        raise RuntimeError("Réponse OpenAI vide (pas de JSON)")
-
-    return json.loads(raw)
-
+    try:
+        return _call_openai_json(
+            model="gpt-4o",
+            input_payload=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Tu es un assistant ERP. "
+                        "1) Identifie le type du document: FACTURE, BC, BR, AUTRE. "
+                        "2) Extrait les champs visibles. "
+                        "Retourne STRICTEMENT un JSON conforme au schéma."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Classe le document et extrait les champs.\n"
+                                "- FACTURE: invoice_no, invoice_date, amount_ttc, devise, fournisseur.\n"
+                                "- BC: bc_no, bc_date, fournisseur.\n"
+                                "- BR: br_no, br_date ou service_date.\n"
+                                "Si absent => null."
+                            ),
+                        },
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                },
+            ],
+            schema_name="doc_bundle_extract_v1",
+            schema=schema,
+            max_output_tokens=800,
+        )
+    except Exception:
+        return _fallback_extract_doc_data(file_path, original_mime, detailed_invoice=False)
 
 def extract_rib_with_openai(file_path: str, original_mime: str) -> dict:
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY manquant")
+    if not _openai_enabled():
+        return _fallback_extract_doc_data(file_path, original_mime, rib_mode=True)
 
     if original_mime == "application/pdf" or file_path.lower().endswith(".pdf"):
         img_bytes = _pdf_first_page_to_png_bytes(file_path)
@@ -1042,37 +1302,25 @@ def extract_rib_with_openai(file_path: str, original_mime: str) -> dict:
         "required": ["beneficiary_name", "bank_name", "rib_or_iban", "swift"],
     }
 
-    resp = openai_client.responses.create(
-        model="gpt-4o",
-        input=[
-            {"role": "system", "content": "Tu lis une attestation RIB/IBAN. Retourne STRICTEMENT un JSON conforme au schéma."},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "Extrait: bénéficiaire, banque, RIB/IBAN, SWIFT si visible."},
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            },
-        ],
-        text={"format": {"type": "json_schema", "name": "rib_extract_v1", "schema": schema, "strict": True}},
-        max_output_tokens=400,
-    )
-
-    raw = getattr(resp, "output_text", None)
-    if not raw:
-        parts = []
-        for item in (getattr(resp, "output", None) or []):
-            for c in (getattr(item, "content", None) or []):
-                if getattr(c, "type", None) in ("output_text", "text") and getattr(c, "text", None):
-                    parts.append(c.text)
-        raw = "\n".join(parts).strip() if parts else None
-
-    if not raw:
-        raise RuntimeError("Réponse OpenAI vide (pas de JSON)")
-
-    return json.loads(raw)
-
-
+    try:
+        return _call_openai_json(
+            model="gpt-4o",
+            input_payload=[
+                {"role": "system", "content": "Tu lis une attestation RIB/IBAN. Retourne STRICTEMENT un JSON conforme au schéma."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Extrait: bénéficiaire, banque, RIB/IBAN, SWIFT si visible."},
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                },
+            ],
+            schema_name="rib_extract_v1",
+            schema=schema,
+            max_output_tokens=400,
+        )
+    except Exception:
+        return _fallback_extract_doc_data(file_path, original_mime, rib_mode=True)
 def _merge_extraction_into_invoice(inv: Invoice, data: dict):
     dt = (data.get("doc_type") or "AUTRE").strip().upper()
 
@@ -1328,6 +1576,7 @@ def _build_automation_snapshot(session: Session) -> dict:
 
     for row in priority_rows:
         row["recommended_account"] = _recommend_company_account(accounts, bank_balances, row["currency"], row["amount"])
+        row["completion"] = _invoice_completion_snapshot(row["invoice"]) if row.get("invoice") else {"score": 0, "missing": []}
 
     matched_txn_ids = {m.banktxn_id for m in session.exec(select(InvoicePaymentMatch.banktxn_id)).all()}
     txns = session.exec(

@@ -65,14 +65,32 @@
     </div>
   </div>
 
+
+  <div class="card guide-strip section-gap">
+    <div>
+      <div class="eyebrow">Utilisation simple</div>
+      <strong>Pour commencer :</strong> cliquez sur <b>Ajouter une facture</b>, déposez un document, puis vérifiez uniquement les champs marqués <span class="badge warn">À compléter</span>.
+    </div>
+    <div class="guide-mini-steps">
+      <span>1. Déposer</span><span>2. Vérifier</span><span>3. Payer</span>
+    </div>
+  </div>
   <!-- Import unique (1 ou plusieurs fichiers) -->
   <div class="card section-gap">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-      <h3 style="margin:0;">Importer (Facture seule ou Dossier Facture+BC+BR)</h3>
-      <div class="muted">1 ou plusieurs fichiers (photo/PDF)</div>
+      <h3 style="margin:0;">Ajouter une facture</h3>
+      <div class="muted">Déposez un PDF ou une photo. L'application essaie de remplir les champs automatiquement.</div>
     </div>
 
     <form action="/factures/scan" method="post" enctype="multipart/form-data" class="import-grid" id="scanForm">
+      <div class="upload-helper">
+        <div class="helper-title">Ce que fait l'application</div>
+        <ul>
+          <li>Classe le document en FACTURE / BC / BR</li>
+          <li>Détecte fournisseur, date, montant et échéance</li>
+          <li>Signale ce qu'il reste à compléter</li>
+        </ul>
+      </div>
       <div class="upload-left">
         <label for="files">Fichiers</label>
 
@@ -105,11 +123,11 @@
 
       <div class="upload-right">
         <button type="submit" class="btn-primary" id="scanBtn">
-          <span class="btn-text">Envoyer à l’IA</span>
+          <span class="btn-text">Analyser et préremplir</span>
           <span class="btn-spinner" aria-hidden="true"></span>
         </button>
         
-        <div class="muted" id="scanMsg">Traitement en cours…</div>
+        <div class="muted" id="scanMsg">Après l'analyse, vérifiez seulement les champs manquants.</div>
       </div>
     </form>
   </div>

@@ -7,6 +7,11 @@
     <h1 class="login-title">Mini-ERP</h1>
     <p class="login-sub">Connexion sécurisée</p>
 
+    <div class="login-helper">
+      <div><strong>Première utilisation ?</strong></div>
+      <div class="muted">Connectez-vous puis commencez par le bouton <b>Ajouter une facture</b>. L'application vous guidera sur les champs manquants et les prochaines actions.</div>
+    </div>
+
     {# Message d'erreur optionnel (si tu ajoutes ?err=1) #}
     {% if request.query_params.get("err") %}
       <div class="alert error" style="margin-bottom:12px;">

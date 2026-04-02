@@ -27,44 +27,34 @@
       <div class="sidebar-sub">Trésorerie</div>
 
       <nav class="sidebar-nav">
+        <div class="nav-group nav-group-highlight">
+          <div class="nav-title">Démarrage rapide</div>
+          <a class="nav-link nav-link-primary {% if p.startswith('/factures') %}active{% endif %}" href="/factures">➕ Ajouter une facture</a>
+          <a class="nav-link {% if p.startswith('/todo') %}active{% endif %}" href="/todo">✅ À faire aujourd'hui</a>
+          <a class="nav-link {% if p.startswith('/automation') %}active{% endif %}" href="/automation">🤖 Automatisation</a>
+        </div>
+
         <div class="nav-group">
-          <div class="nav-title">Dashboard</div>
+          <div class="nav-title">Suivi quotidien</div>
           <a class="nav-link {% if p=='/' %}active{% endif %}" href="/">Accueil</a>
-          <a class="nav-link {% if p.startswith('/automation') %}active{% endif %}" href="/automation">Automatisation</a>
-        </div>
-
-        <div class="nav-group">
-          <div class="nav-title">Achats</div>
-          <a class="nav-link {% if p.startswith('/factures') %}active{% endif %}" href="/factures">Achats</a>
-          <a class="nav-link {% if p.startswith('/suppliers') %}active{% endif %}" href="/suppliers">Fournisseurs</a>
-        </div>
-
-        <div class="nav-group">
-          <div class="nav-title">Trésorerie</div>
-          <a class="nav-link {% if p.startswith('/tresorerie') %}active{% endif %}" href="/tresorerie">Vue trésorerie</a>
-          <a class="nav-link {% if p.startswith('/reglements') %}active{% endif %}" href="/reglements">Ordres de virement</a>
-          <a class="nav-link {% if p.startswith('/releves') %}active{% endif %}" href="/releves">Relevés bancaires</a>
-          <a class="nav-link {% if p.startswith('/matching') %}active{% endif %}" href="/matching">Matching</a>
+          <a class="nav-link {% if p.startswith('/factures') %}active{% endif %}" href="/factures">Factures</a>
+          <a class="nav-link {% if p.startswith('/planning') %}active{% endif %}" href="/planning">Paiements</a>
+          <a class="nav-link {% if p.startswith('/matching') %}active{% endif %}" href="/matching">Rapprochements</a>
         </div>
 
         <div class="nav-group">
           <div class="nav-title">Pilotage</div>
-          <a class="nav-link {% if p.startswith('/cashflow') %}active{% endif %}" href="/cashflow">Cashflow</a>
-          <a class="nav-link {% if p.startswith('/planning') %}active{% endif %}" href="/planning">Planning paiements</a>
+          <a class="nav-link {% if p.startswith('/tresorerie') %}active{% endif %}" href="/tresorerie">Trésorerie</a>
+          <a class="nav-link {% if p.startswith('/delais') %}active{% endif %}" href="/delais">Délais de paiement</a>
           <a class="nav-link {% if p.startswith('/analytics') %}active{% endif %}" href="/analytics">Analytique</a>
           <a class="nav-link {% if p.startswith('/budget') %}active{% endif %}" href="/budget">Budget</a>
         </div>
 
         <div class="nav-group">
-          <div class="nav-title">Conformité</div>
-          <a class="nav-link {% if p.startswith('/delais') %}active{% endif %}" href="/delais">Délais de paiement</a>
-        </div>
-
-        <div class="nav-group">
-          <div class="nav-title">Paramètres</div>
+          <div class="nav-title">Référentiel</div>
+          <a class="nav-link {% if p.startswith('/suppliers') %}active{% endif %}" href="/suppliers">Fournisseurs</a>
+          <a class="nav-link {% if p.startswith('/releves') %}active{% endif %}" href="/releves">Relevés bancaires</a>
           <a class="nav-link {% if p.startswith('/banks') %}active{% endif %}" href="/banks">Comptes société</a>
-          <a class="nav-link {% if p.startswith('/banques') %}active{% endif %}" href="/banques">Modèles OV</a>
-          <a class="nav-link {% if p.startswith('/postes') %}active{% endif %}" href="/postes?kind=BUDGET">Postes (Analytique/Budget)</a>
         </div>
       </nav>
 

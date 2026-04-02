@@ -1907,6 +1907,41 @@ def automation_hub(request: Request, session: Session = Depends(get_session)):
     )
 
 
+@app.get("/todo", response_class=HTMLResponse)
+def todo_page(request: Request, session: Session = Depends(get_session)):
+    user = get_current_user(request, session)
+    automation = _build_automation_snapshot(session)
+    quick_actions = [
+        {
+            "title": "Importer une nouvelle facture",
+            "desc": "Commencez par déposer un PDF ou une photo. L'application tente de remplir automatiquement les champs.",
+            "href": "/factures",
+            "cta": "Ajouter une facture",
+        },
+        {
+            "title": "Compléter les dossiers incomplets",
+            "desc": f"{len(automation['action_buckets']['missing_data'])} dossier(s) demandent une vérification ou un complément.",
+            "href": "/automation",
+            "cta": "Voir les éléments à corriger",
+        },
+        {
+            "title": "Préparer les paiements urgents",
+            "desc": f"{len(automation['action_buckets']['critical'])} priorité(s) critique(s) et {len(automation['action_buckets']['high'])} haute(s).",
+            "href": "/planning",
+            "cta": "Ouvrir le planning",
+        },
+    ]
+    return templates.TemplateResponse(
+        "todo.html",
+        {
+            "request": request,
+            "user": user,
+            "automation": automation,
+            "quick_actions": quick_actions,
+        },
+    )
+
+
 
 # ---------------- ASSISTANT (Q/R DB) ----------------
 

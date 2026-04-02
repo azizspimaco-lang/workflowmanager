@@ -1,381 +1,118 @@
-{# templates/home.html (Dashboard style C - analytique / BI) #}
 {% extends "_base.html" %}
 {% block content %}
-
-<div class="bi">
-  <div class="bi-head card">
+<div class="ux-home">
+  <section class="card hero-guide section-gap">
     <div>
-      <h1 class="bi-title">Accueil</h1>
-      <div class="muted">Gestion de trésorerie, délais de paiement et documents</div>
+      <div class="eyebrow">Accueil guidé</div>
+      <h1 class="dash-title" style="margin-bottom:6px;">Une application plus simple à utiliser</h1>
+      <p class="muted" style="max-width:760px;">L'utilisateur peut commencer par une seule action : ajouter une facture. Ensuite, l'application explique ce qui a été détecté, ce qui manque et ce qu'il faut faire aujourd'hui.</p>
+      <div class="hero-steps">
+        <div class="hero-step"><span>1</span> Ajouter une facture</div>
+        <div class="hero-step"><span>2</span> Vérifier les champs détectés</div>
+        <div class="hero-step"><span>3</span> Préparer le paiement</div>
+      </div>
     </div>
-
-    <form method="get" action="/assistant" class="bi-search">
-      <span class="bi-search-ico" aria-hidden="true">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z" stroke="currentColor" stroke-width="2"/>
-          <path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-      </span>
-      <input name="q" placeholder="Posez une question sur vos finances…" />
-      <button class="bi-search-mic" type="submit" title="Rechercher" aria-label="Rechercher">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="2"/>
-          <path d="M19 11a7 7 0 0 1-14 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <path d="M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-      </button>
-    </form>
-  </div>
-
-  <div class="card auto-strip">
-    <div>
-      <div class="muted" style="margin-bottom:4px;">Pilotage automatique</div>
-      <div style="font-weight:800; font-size:20px;">{{ automation.action_buckets.critical|length }} priorités critiques · {{ automation.high_conf_matches|length }} matchings auto fiables</div>
-      <div class="muted">Le moteur trie les échéances, détecte les données manquantes et prépare les rapprochements bancaires probables.</div>
+    <div class="hero-actions">
+      <a class="btn btn-primary btn-xl" href="/factures">➕ Ajouter une facture</a>
+      <a class="btn-secondary btn-xl" href="/todo">✅ Voir quoi faire aujourd'hui</a>
     </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap;">
-      <a class="btn btn-primary" href="/automation">Ouvrir le centre d'automatisation</a>
-      <a class="btn-secondary" href="/matching?auto=1">Voir les matchings</a>
-    </div>
-  </div>
+  </section>
 
-  <div class="bi-top">
-    <div class="bi-kpi card kpi-warm">
-      <div class="kpi-label">Total à payer 7 jours</div>
-      <div class="kpi-val">
-        {% if kpi.pay_7 %}
-          {% set first = true %}
-          {% for cur, amt in kpi.pay_7.items() %}
-            {% if first %}
-              <span class="kpi-num">{{ "{:,.0f}".format(amt).replace(",", " ") }}</span>
-              <span class="kpi-cur">{{ cur }}</span>
-              {% set first = false %}
-            {% endif %}
+  <section class="quick-grid section-gap">
+    <a class="card quick-card" href="/factures">
+      <div class="quick-kicker">Action principale</div>
+      <h3>Importer un document</h3>
+      <p class="muted">Facture seule ou dossier complet. L'outil classe FACTURE / BC / BR automatiquement.</p>
+    </a>
+    <a class="card quick-card" href="/automation">
+      <div class="quick-kicker">Vérifications</div>
+      <h3>Corriger les éléments incomplets</h3>
+      <p class="muted">{{ automation.action_buckets.missing_data|length }} dossier(s) nécessitent un complément ou une validation.</p>
+    </a>
+    <a class="card quick-card" href="/planning">
+      <div class="quick-kicker">Paiements</div>
+      <h3>Traiter les urgences</h3>
+      <p class="muted">{{ automation.action_buckets.critical|length }} priorité(s) critique(s) et {{ automation.action_buckets.high|length }} priorité(s) haute(s).</p>
+    </a>
+  </section>
+
+  <section class="kpi-grid section-gap">
+    <div class="card kpi">
+      <div class="muted kpi-label">À payer sous 7 jours</div>
+      <div class="kpi-value">{% if kpi.pay_7 %}{% for cur, amt in kpi.pay_7.items()|list[:1] %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
+      <div class="muted">Urgence court terme</div>
+    </div>
+    <div class="card kpi">
+      <div class="muted kpi-label">En retard</div>
+      <div class="kpi-value">{% if kpi.overdue %}{% for cur, amt in kpi.overdue.items()|list[:1] %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
+      <div class="muted">Factures à régulariser</div>
+    </div>
+    <div class="card kpi">
+      <div class="muted kpi-label">Conformité délais</div>
+      <div class="kpi-value">{{ compliance_pct }}%</div>
+      <div class="muted">Dossiers avec échéance calculée</div>
+    </div>
+    <div class="card kpi">
+      <div class="muted kpi-label">Matchings fiables</div>
+      <div class="kpi-value">{{ automation.high_conf_matches|length }}</div>
+      <div class="muted">Rapprochements prêts</div>
+    </div>
+  </section>
+
+  <section class="card section-gap">
+    <div class="section-head">
+      <div>
+        <div class="eyebrow">À faire aujourd'hui</div>
+        <h3 style="margin:0;">Priorités visibles en un coup d'œil</h3>
+      </div>
+      <a class="btn-secondary" href="/todo">Ouvrir la page dédiée</a>
+    </div>
+    <div class="todo-preview-grid">
+      <div class="todo-box todo-box-danger">
+        <div class="todo-box-label">Critiques</div>
+        <div class="todo-box-value">{{ automation.action_buckets.critical|length }}</div>
+        <div class="muted">Échéances dépassées ou très proches</div>
+      </div>
+      <div class="todo-box">
+        <div class="todo-box-label">À compléter</div>
+        <div class="todo-box-value">{{ automation.action_buckets.missing_data|length }}</div>
+        <div class="muted">Champs ou pièces manquants</div>
+      </div>
+      <div class="todo-box">
+        <div class="todo-box-label">Paiements à lancer</div>
+        <div class="todo-box-value">{{ automation.action_buckets.recommended_now|length }}</div>
+        <div class="muted">Factures à traiter cette semaine</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card section-gap">
+    <div class="section-head">
+      <div>
+        <div class="eyebrow">Documents proches</div>
+        <h3 style="margin:0;">Prochaines échéances</h3>
+      </div>
+      <a class="btn-secondary" href="/factures">Voir toutes les factures</a>
+    </div>
+    {% if upcoming %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Échéance</th><th>Fournisseur</th><th>Référence</th><th style="text-align:right;">Montant</th></tr></thead>
+        <tbody>
+          {% for row in upcoming[:6] %}
+          <tr>
+            <td>{{ row.due }}</td>
+            <td><a href="/factures/{{ row.id }}">{{ row.supplier }}</a></td>
+            <td>{{ row.ref }}</td>
+            <td style="text-align:right;">{{ "%.2f"|format(row.amount) }} {{ row.currency }}</td>
+          </tr>
           {% endfor %}
-        {% else %}
-          <span class="kpi-num">0</span> <span class="kpi-cur">MAD</span>
-        {% endif %}
-      </div>
-      <div class="kpi-sub">{% if kpi.pay_7 and kpi.pay_7|length>1 %}Multi-devises : voir détails{% else %}&nbsp;{% endif %}</div>
+        </tbody>
+      </table>
     </div>
-
-    <div class="bi-kpi card kpi-warm">
-      <div class="kpi-label">Total à payer 30 jours</div>
-      <div class="kpi-val">
-        {% if kpi.pay_30 %}
-          {% set first = true %}
-          {% for cur, amt in kpi.pay_30.items() %}
-            {% if first %}
-              <span class="kpi-num">{{ "{:,.0f}".format(amt).replace(",", " ") }}</span>
-              <span class="kpi-cur">{{ cur }}</span>
-              {% set first = false %}
-            {% endif %}
-          {% endfor %}
-        {% else %}
-          <span class="kpi-num">0</span> <span class="kpi-cur">MAD</span>
-        {% endif %}
-      </div>
-      <div class="kpi-sub">&nbsp;</div>
-    </div>
-
-    <div class="bi-kpi card kpi-danger">
-      <div class="kpi-label">En retard</div>
-      <div class="kpi-val">
-        {% if kpi.overdue %}
-          {% set first = true %}
-          {% for cur, amt in kpi.overdue.items() %}
-            {% if first %}
-              <span class="kpi-num">{{ "{:,.0f}".format(amt).replace(",", " ") }}</span>
-              <span class="kpi-cur">{{ cur }}</span>
-              {% set first = false %}
-            {% endif %}
-          {% endfor %}
-        {% else %}
-          <span class="kpi-num">0</span> <span class="kpi-cur">MAD</span>
-        {% endif %}
-      </div>
-      <div class="kpi-sub">&nbsp;</div>
-    </div>
-
-    <div class="bi-card card">
-      <div class="bi-cardtitle">Trésorerie disponible</div>
-      <div class="bi-donutwrap">
-        <canvas id="donutTreasury" width="170" height="170"></canvas>
-        <div class="bi-donut-center">
-          <div class="bi-donut-big">{{ compliance_pct }}%</div>
-          <div class="muted">Conforme</div>
-        </div>
-      </div>
-      <div class="bi-side-metrics">
-        <div class="bi-side-row"><span class="dot dot-ok"></span> <span>{{ compliance_pct }}% Conforme</span></div>
-        <div class="bi-side-row"><span class="dot dot-danger"></span> <span>{% set m = (kpi.overdue.get('MAD', 0) if kpi.overdue else 0) %}{{ "{:,.0f}".format(m).replace(",", " ") }} MAD</span></div>
-        <div class="bi-side-row"><span class="dot dot-blue"></span> <span>{{ kpi.foreign_excluded }} factures étrangères</span></div>
-      </div>
-      <div class="bi-cardactions">
-        <a class="btn" href="/tresorerie">Exporter</a>
-        <a class="link" href="/tresorerie">Voir détails ›</a>
-      </div>
-    </div>
-  </div>
-
-  <div class="bi-grid">
-
-    <div class="bi-card card">
-      <div class="bi-cardhead">
-        <div>
-          <div class="bi-cardtitle">Prochaines échéances</div>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr><th>Date</th><th>Fournisseur</th><th style="text-align:right;">Montant</th></tr>
-          </thead>
-          <tbody>
-            {% for r in upcoming %}
-              <tr>
-                <td class="mono">{{ r.due }}</td>
-                <td>{{ r.supplier }}</td>
-                <td class="mono" style="text-align:right;">{{ "{:,.0f}".format(r.amount).replace(",", " ") }} {{ r.currency }}</td>
-              </tr>
-            {% else %}
-              <tr><td colspan="3" class="muted">Aucune échéance.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <div class="bi-footbtn">
-        <a class="btn" href="/factures">Voir toutes</a>
-      </div>
-    </div>
-
-    <div class="bi-card card">
-      <div class="bi-cardhead">
-        <div>
-          <div class="bi-cardtitle">Top factures en cours</div>
-        </div>
-        <a class="link" href="/factures">Voir détails ›</a>
-      </div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr><th>Facture</th><th>Fournisseur</th><th style="text-align:right;">Montant</th></tr>
-          </thead>
-          <tbody>
-            {% for r in top_open %}
-              <tr>
-                <td class="mono"><a href="/factures/{{ r.id }}">{{ r.ref }}</a></td>
-                <td>{{ r.supplier }}</td>
-                <td class="mono" style="text-align:right;">{{ "{:,.0f}".format(r.amount).replace(",", " ") }} {{ r.currency }}</td>
-              </tr>
-            {% else %}
-              <tr><td colspan="3" class="muted">Aucune facture ouverte.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="bi-bank card">
-      <div class="bi-cardhead">
-        <div class="bi-cardtitle">Trésorerie par banque</div>
-      </div>
-
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Banque</th>
-              <th style="text-align:right;">Solde</th>
-              <th style="text-align:right;">-7j</th>
-              <th style="text-align:right;">-30j</th>
-              <th style="text-align:right;">-90j</th>
-              <th>Alerte</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for b in bank_rows %}
-              <tr>
-                <td><span class="bank-pill">{{ b.bank }}</span></td>
-                <td class="mono" style="text-align:right;">{% if b.cur_bal is not none %}{{ "{:,.0f}".format(b.cur_bal).replace(",", " ") }} MAD{% else %}—{% endif %}</td>
-                <td class="mono" style="text-align:right;">{{ "{:,.0f}".format(b.out_7).replace(",", " ") }}</td>
-                <td class="mono" style="text-align:right;">{{ "{:,.0f}".format(b.out_30).replace(",", " ") }}</td>
-                <td class="mono" style="text-align:right;">{{ "{:,.0f}".format(b.out_90).replace(",", " ") }}</td>
-                <td>
-                  {% if b.alert %}
-                    <span class="badge badge-danger">{{ b.alert }}</span>
-                  {% else %}
-                    <span class="badge badge-ok">OK</span>
-                  {% endif %}
-                </td>
-              </tr>
-            {% else %}
-              <tr><td colspan="6" class="muted">Ajoute un compte société et importe un relevé.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="bi-bank-chart">
-        <div class="bi-chart-head">
-          <div class="bi-chart-title">Échéancier trésorerie</div>
-          <div class="bi-tabs" id="curTabs">
-            {% for cur, d in chart_by_cur.items() %}
-              <button type="button" class="tab {% if cur==default_chart_cur %}active{% endif %}" data-cur="{{ cur }}">{{ cur }}</button>
-            {% endfor %}
-          </div>
-        </div>
-        {# Height is controlled via CSS to avoid oversized charts on wide screens #}
-        <canvas id="cashChart"></canvas>
-        <div class="bi-legend">
-          <span><span class="sw sw-pay"></span> À payer</span>
-          <span><span class="sw sw-late"></span> Retards</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="bi-side">
-      <div class="bi-card card">
-        <div class="bi-cardtitle">Délais de paiement</div>
-        <div class="bi-donutwrap" style="margin-top:8px;">
-          <canvas id="donutDelay" width="170" height="170"></canvas>
-          <div class="bi-donut-center">
-            <div class="bi-donut-big">{{ compliance_pct }}%</div>
-            <div class="muted">Conforme</div>
-          </div>
-        </div>
-        <div class="bi-side-metrics">
-          <div class="bi-side-row"><span class="dot dot-danger"></span> <span>{% set m = (kpi.overdue.get('MAD', 0) if kpi.overdue else 0) %}{{ "{:,.0f}".format(m).replace(",", " ") }} MAD</span> <span class="muted">En retard</span></div>
-          <div class="bi-side-row"><span class="dot dot-blue"></span> <span>{{ kpi.foreign_excluded }} factures étrangères</span></div>
-        </div>
-        <div class="bi-cardactions">
-          <a class="btn" href="/delais">Exporter</a>
-        </div>
-      </div>
-
-      <div class="bi-card card" style="margin-top:12px;">
-        <div class="bi-cardtitle">Alertes</div>
-        {% if alerts %}
-          <ul class="dash-list">
-            {% for a in alerts %}<li>{{ a }}</li>{% endfor %}
-          </ul>
-        {% else %}
-          <div class="muted">Aucune alerte.</div>
-        {% endif %}
-        <div class="bi-actions-row">
-          <a class="btn-secondary" href="/factures">Voir affectations</a>
-          <a class="btn-secondary" href="/suppliers">Affecter fournisseur</a>
-        </div>
-      </div>
-
-    </div>
-
-  </div>
-
+    {% else %}
+    <div class="muted">Aucune facture ouverte détectée.</div>
+    {% endif %}
+  </section>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script>
-(function(){
-  const byCur = {{ chart_by_cur | tojson }};
-  const defaultCur = {{ default_chart_cur | tojson }};
-
-  function fmt(v){
-    try { return Number(v||0).toLocaleString('fr-FR'); } catch(e){ return v; }
-  }
-
-  // Doughnuts (visual only, based on compliance %)
-  const pct = Number({{ compliance_pct }} || 0);
-  function buildDonut(id){
-    const el = document.getElementById(id);
-    if(!el) return;
-    new Chart(el, {
-      type: 'doughnut',
-      data: {
-        labels: ['Conforme', 'Non conforme'],
-        datasets: [{
-          data: [pct, Math.max(0, 100-pct)],
-          backgroundColor: ['#26a69a', 'rgba(148,163,184,0.35)'],
-          borderWidth: 0,
-          hoverOffset: 2,
-        }]
-      },
-      options: {
-        cutout: '72%',
-        plugins: { legend: { display:false }, tooltip: { enabled:false } },
-      }
-    });
-  }
-  buildDonut('donutTreasury');
-  buildDonut('donutDelay');
-
-  // Cash chart (switchable currency)
-  const ctx = document.getElementById('cashChart');
-  if(!ctx) return;
-
-  let cur = defaultCur;
-  function dataFor(c){
-    const d = byCur[c] || {labels:['7 jours','30 jours','60 jours','90 jours'], a_payer:[0,0,0,0], retard:[0,0,0,0]};
-    // Ensure numeric arrays
-    const ap = (d.a_payer||[]).map(x=>Number(x||0));
-    const rt = (d.retard||[]).map(x=>Number(x||0));
-    return {labels: d.labels || ['7 jours','30 jours','60 jours','90 jours'], a_payer: ap, retard: rt};
-  }
-
-  const initial = dataFor(cur);
-  const chart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: initial.labels,
-      datasets: [
-        { label: 'À payer', data: initial.a_payer, borderWidth: 0, borderRadius: 8, stack: 's', backgroundColor: '#f4b400' },
-        { label: 'Retards', data: initial.retard, borderWidth: 0, borderRadius: 8, stack: 's', backgroundColor: '#db4437' },
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display:false },
-        tooltip: {
-          callbacks: {
-            label: (c) => `${c.dataset.label}: ${fmt(c.parsed.y)} ${cur}`
-          }
-        }
-      },
-      scales: {
-        x: {
-          stacked:true,
-          grid: { display:false },
-          ticks: { color: 'rgba(15,23,42,.65)', font: { family: 'Inter', weight: '600' } }
-        },
-        y: {
-          stacked:true,
-          beginAtZero:true,
-          grid: { color: 'rgba(15,23,42,.10)' },
-          ticks: { color: 'rgba(15,23,42,.65)', font: { family: 'Inter', weight: '600' }, callback: (v)=>fmt(v) }
-        }
-      }
-    }
-  });
-
-  const tabs = document.getElementById('curTabs');
-  if(tabs){
-    tabs.addEventListener('click', (e)=>{
-      const btn = e.target.closest('button[data-cur]');
-      if(!btn) return;
-      const next = btn.getAttribute('data-cur');
-      if(!next || !byCur[next]) return;
-      cur = next;
-      for(const b of tabs.querySelectorAll('button.tab')) b.classList.toggle('active', b===btn);
-      const d = dataFor(cur);
-      chart.data.labels = d.labels;
-      chart.data.datasets[0].data = d.a_payer;
-      chart.data.datasets[1].data = d.retard;
-      chart.update();
-    });
-  }
-})();
-</script>
-
 {% endblock %}

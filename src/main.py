@@ -570,6 +570,53 @@ def _parse_amount_guess(value: Optional[str]) -> Optional[float]:
         return None
 
 
+def _extract_amount_triplet(text_value: str) -> dict:
+    """Essaie d'extraire TTC / HT / TVA / taux depuis du texte brut (OCR/PDF/bytes)."""
+    def pick(patterns: list[str]) -> Optional[float]:
+        return _parse_amount_guess(_first_match(text_value, patterns))
+
+    ttc = pick([
+        r"(?:TOTAL\s*TTC|NET\s*[ÀA]\s*PAYER|GRAND\s*TOTAL|TOTAL\s*FACTURE)\s*[: ]*([0-9\s.,]+)",
+        r"(?:MONTANT\s*TTC)\s*[: ]*([0-9\s.,]+)",
+    ])
+    ht = pick([
+        r"(?:TOTAL\s*HT|MONTANT\s*HT)\s*[: ]*([0-9\s.,]+)",
+        r"(?:SOUS\s*TOTAL|TOTAL\s*HORS\s*TAXE)\s*[: ]*([0-9\s.,]+)",
+    ])
+    vat = pick([
+        r"(?:TOTAL\s*TVA|MONTANT\s*TVA|TVA)\s*[: ]*([0-9\s.,]+)",
+    ])
+    rate = pick([
+        r"(?:TVA|TAXE)\s*[: ]*([0-9]{1,2}(?:[.,][0-9]{1,2})?)\s*%",
+        r"([0-9]{1,2}(?:[.,][0-9]{1,2})?)\s*%",
+    ])
+
+    # Reconstitution intelligente si partiel
+    if rate is not None and rate <= 1:
+        rate = rate * 100
+    r = (rate / 100.0) if rate is not None else None
+
+    if ttc is None and ht is not None and vat is not None:
+        ttc = round(ht + vat, 2)
+    if vat is None and ht is not None and ttc is not None:
+        vat = round(ttc - ht, 2)
+    if ht is None and ttc is not None and r is not None:
+        ht = round(ttc / (1 + r), 2)
+    if vat is None and ht is not None and r is not None:
+        vat = round(ht * r, 2)
+    if ttc is None and ht is not None and r is not None:
+        ttc = round(ht * (1 + r), 2)
+    if rate is None and ht not in (None, 0) and vat is not None:
+        rate = round((vat / ht) * 100.0, 2)
+
+    return {
+        "amount_ht": ht,
+        "amount_vat": vat,
+        "amount_ttc": ttc,
+        "vat_rate": rate,
+    }
+
+
 def _guess_currency(text_value: str) -> str:
     t = (text_value or "").upper()
     if "EUR" in t or "€" in t:
@@ -608,10 +655,8 @@ def _fallback_extract_doc_data(file_path: str, original_mime: str, *, detailed_i
         r"\b(20\d{2}[/-]\d{2}[/-]\d{2})\b",
         r"\b(\d{2}[/-]\d{2}[/-]20\d{2})\b",
     ])
-    amount_guess = _parse_amount_guess(_first_match(text_value, [
-        r"(?:TOTAL\s*TTC|NET\s*[ÀA]\s*PAYER|GRAND\s*TOTAL)\s*[: ]*([0-9\s.,]+)",
-        r"(?:MONTANT\s*TTC)\s*[: ]*([0-9\s.,]+)",
-    ]))
+    amount_bits = _extract_amount_triplet(text_value)
+    amount_guess = amount_bits.get("amount_ttc")
     terms_guess = _parse_amount_guess(_first_match(text_value, [r"(\d{1,3})\s*(?:jours|j)\b"]))
     supplier_guess = _guess_supplier_name(text_value, file_path)
     currency_guess = _guess_currency(text_value)
@@ -653,9 +698,9 @@ def _fallback_extract_doc_data(file_path: str, original_mime: str, *, detailed_i
     }
     if detailed_invoice:
         base_data.update({
-            "amount_ht": None,
-            "vat_rate": None,
-            "amount_vat": None,
+            "amount_ht": amount_bits.get("amount_ht"),
+            "vat_rate": amount_bits.get("vat_rate"),
+            "amount_vat": amount_bits.get("amount_vat"),
             "department": None,
             "analytic": None,
             "nature_operation": "SERVICES" if re.search(r"SERVICE", upper) else "BIENS",
@@ -1007,6 +1052,14 @@ def _next_business_day(d: date) -> date:
 
 
 def compute_pay_delay_fields(inv: Invoice):
+    """Calcule l'échéance légale selon la logique DGI.
+
+    - délai convenu: payment_terms_days (max 120) ou dérogation (max 180)
+    - à défaut: 60 jours
+    - point de départ principal: date d'émission de la facture
+    - à défaut: fin du mois de la livraison / exécution / prestation
+    - si l'échéance tombe un week-end: report au prochain jour ouvrable
+    """
     if inv.derogation_sector and inv.derogation_days:
         terms = min(int(inv.derogation_days), 180)
     elif inv.payment_terms_days:
@@ -1015,31 +1068,19 @@ def compute_pay_delay_fields(inv: Invoice):
         terms = 60
     inv.applied_terms_days = terms
 
-    nature = (inv.nature_operation or "").strip().upper()
-    if nature not in ("BIENS", "SERVICES", "TRAVAUX"):
-        nature = ""
-
     start_d: Optional[date] = None
 
-    if nature in ("SERVICES", "TRAVAUX"):
-        if inv.service_date:
-            eom = _end_of_month(inv.service_date.date())
-            inv.calc_start_date = datetime.combine(eom, datetime.min.time())
-            inv.calc_start_rule = "FIN_MOIS_SERVICE"
-            start_d = eom
-        elif inv.invoice_date:
-            inv.calc_start_date = inv.invoice_date
-            inv.calc_start_rule = "DATE_FACTURE"
-            start_d = inv.invoice_date.date()
+    # La circulaire prend d'abord la date de facture; à défaut on retient la fin du mois de la prestation/livraison.
+    if inv.invoice_date:
+        inv.calc_start_date = inv.invoice_date
+        inv.calc_start_rule = "DATE_FACTURE"
+        start_d = inv.invoice_date.date()
     else:
-        if inv.invoice_date:
-            inv.calc_start_date = inv.invoice_date
-            inv.calc_start_rule = "DATE_FACTURE"
-            start_d = inv.invoice_date.date()
-        elif inv.service_date:
-            eom = _end_of_month(inv.service_date.date())
+        anchor_dt = getattr(inv, "service_date", None) or getattr(inv, "br_date", None) or getattr(inv, "bc_date", None)
+        if anchor_dt:
+            eom = _end_of_month(anchor_dt.date())
             inv.calc_start_date = datetime.combine(eom, datetime.min.time())
-            inv.calc_start_rule = "FIN_MOIS_SERVICE"
+            inv.calc_start_rule = "FIN_MOIS_PRESTATION"
             start_d = eom
 
     if not start_d:
@@ -4110,32 +4151,57 @@ def _ensure_invoice_document_facture(
 
 def _finalize_invoice_fields(inv: "Invoice") -> None:
     """Complète des champs calculables si l'extraction n'a pas tout rempli."""
-    if (inv.amount is None or float(inv.amount) == 0.0) and inv.amount_ttc is not None:
-        try:
-            inv.amount = float(inv.amount_ttc)
-        except Exception:
-            pass
-
     try:
         ttc = float(inv.amount_ttc) if inv.amount_ttc is not None else None
     except Exception:
         ttc = None
 
     try:
+        ht = float(inv.amount_ht) if inv.amount_ht is not None else None
+    except Exception:
+        ht = None
+
+    try:
+        vat = float(inv.amount_vat) if inv.amount_vat is not None else None
+    except Exception:
+        vat = None
+
+    try:
         rate = float(inv.vat_rate) if inv.vat_rate is not None else None
     except Exception:
         rate = None
 
-    if inv.amount_ht is None and ttc is not None and rate is not None:
-        r = rate / 100.0 if rate > 1.0 else rate
-        if r >= 0:
-            inv.amount_ht = round(ttc / (1 + r), 2)
+    if rate is not None and rate <= 1.0:
+        rate = rate * 100.0
+        inv.vat_rate = round(rate, 2)
 
-    if inv.amount_vat is None and inv.amount_ht is not None and ttc is not None:
-        try:
-            inv.amount_vat = round(ttc - float(inv.amount_ht), 2)
-        except Exception:
-            pass
+    r = (rate / 100.0) if rate is not None else None
+
+    if ttc is None and ht is not None and vat is not None:
+        ttc = round(ht + vat, 2)
+        inv.amount_ttc = ttc
+    if vat is None and ht is not None and ttc is not None:
+        vat = round(ttc - ht, 2)
+        inv.amount_vat = vat
+    if ht is None and ttc is not None and r is not None:
+        ht = round(ttc / (1 + r), 2)
+        inv.amount_ht = ht
+    if vat is None and ht is not None and r is not None:
+        vat = round(ht * r, 2)
+        inv.amount_vat = vat
+    if ttc is None and ht is not None and r is not None:
+        ttc = round(ht * (1 + r), 2)
+        inv.amount_ttc = ttc
+    if rate is None and ht not in (None, 0.0) and vat is not None:
+        inv.vat_rate = round((vat / ht) * 100.0, 2)
+
+    if (inv.amount is None or float(inv.amount or 0.0) == 0.0):
+        base_amt = inv.amount_ttc if inv.amount_ttc is not None else (inv.amount_ht if inv.amount_ht is not None else None)
+        if base_amt is not None:
+            try:
+                inv.amount = float(base_amt)
+            except Exception:
+                pass
 
     if inv.due_date is None and inv.invoice_date is not None and inv.payment_terms_days:
         try:

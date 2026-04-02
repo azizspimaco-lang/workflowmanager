@@ -185,10 +185,23 @@
             </div>
           </div>
 
-          <div class="muted" style="margin-top:10px;">
+          <div class="muted" style="margin-top:10px; line-height:1.5;">
             Échéance légale :
             <b>{{ inv.legal_due_date.date().isoformat() if inv.legal_due_date else "—" }}</b>
             {% if due and overdue %}(retard J+{{ days_late }}){% endif %}
+            <br>
+            {% if inv.payment_terms_days %}
+              Règle appliquée : <b>délai convenu {{ inv.applied_terms_days or inv.payment_terms_days }} jours</b>
+            {% elif inv.derogation_sector and inv.derogation_days %}
+              Règle appliquée : <b>dérogation sectorielle {{ inv.applied_terms_days or inv.derogation_days }} jours</b>
+            {% else %}
+              Règle appliquée : <b>délai légal par défaut 60 jours</b>
+            {% endif %}
+            {% if inv.calc_start_rule == 'DATE_FACTURE' and inv.calc_start_date %}
+              · Base de calcul : <b>date de facture {{ inv.calc_start_date.date().isoformat() }}</b>
+            {% elif inv.calc_start_rule and inv.calc_start_date %}
+              · Base de calcul : <b>fin du mois de la livraison / prestation {{ inv.calc_start_date.date().isoformat() }}</b>
+            {% endif %}
           </div>
 
           <div class="invoice-actions">
@@ -237,7 +250,7 @@
             <div>
               <label>Montant HT</label>
               <input class="input" type="number" step="0.01" name="amount_ht"
-                     value="{{ inv.amount_ht | mad if inv.amount_ht is not none else '' }}">
+                     value="{{ ('%.2f'|format(inv.amount_ht)) if inv.amount_ht is not none else '' }}">
             </div>
             <div>
               <label>TVA %</label>
@@ -247,12 +260,12 @@
             <div>
               <label>Montant TVA</label>
               <input class="input" type="number" step="0.01" name="amount_vat"
-                     value="{{ inv.amount_vat | mad if inv.amount_vat is not none else '' }}">
+                     value="{{ ('%.2f'|format(inv.amount_vat)) if inv.amount_vat is not none else '' }}">
             </div>
             <div>
               <label>Montant TTC</label>
               <input class="input" type="number" step="0.01" name="amount_ttc"
-                     value="{{ (inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0)) | mad }}">
+                     value="{{ ('%.2f'|format(inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0))) }}">
             </div>
 
             <div style="grid-column: 1 / -1;">

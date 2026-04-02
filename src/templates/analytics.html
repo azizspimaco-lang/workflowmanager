@@ -1,0 +1,135 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+  <div class="card section-gap" style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h1 style="margin:0;">Analytique</h1>
+      <div class="muted">Synthèse basée sur les factures (montants TTC si dispo, sinon amount).</div>
+    </div>
+
+    <form method="get" action="/analytics" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <label class="muted">Année</label>
+      <input class="input" type="number" name="year" value="{{ year }}" style="width:120px;" />
+      <label class="muted">Statut</label>
+      <select class="input" name="scope" style="width:180px;">
+        <option value="open" {% if scope=='open' %}selected{% endif %}>À payer (open)</option>
+        <option value="all" {% if scope=='all' %}selected{% endif %}>Toutes</option>
+      </select>
+      <button class="btn btn-primary" type="submit">Filtrer</button>
+    </form>
+      <a class="btn-secondary" href="/analytics/allocations">📌 Affectations</a>
+
+  </div>
+
+  <div class="grid-2">
+    <div class="card section-gap">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">Par analytique</h3>
+        <div class="muted">{{ currency }}</div>
+      </div>
+      <div class="table-wrap" style="margin-top:10px;">
+        <table class="table">
+          <thead>
+            <tr><th>Analytique</th><th style="text-align:right;">Montant</th><th style="text-align:right;">Nb</th></tr>
+          </thead>
+          <tbody>
+            {% for r in by_analytic %}
+              <tr>
+                <td>{{ r.key }}</td>
+                <td style="text-align:right;">{{ "%.2f"|format(r.total) }}</td>
+                <td style="text-align:right;">{{ r.count }}</td>
+              </tr>
+            {% endfor %}
+            {% if by_analytic|length == 0 %}
+              <tr><td colspan="3" class="muted">Aucune donnée.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card section-gap">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">Par projet</h3>
+        <div class="muted">{{ currency }}</div>
+      </div>
+      <div class="table-wrap" style="margin-top:10px;">
+        <table class="table">
+          <thead>
+            <tr><th>Projet</th><th style="text-align:right;">Montant</th><th style="text-align:right;">Nb</th></tr>
+          </thead>
+          <tbody>
+            {% for r in by_project %}
+              <tr>
+                <td>{{ r.key }}</td>
+                <td style="text-align:right;">{{ "%.2f"|format(r.total) }}</td>
+                <td style="text-align:right;">{{ r.count }}</td>
+              </tr>
+            {% endfor %}
+            {% if by_project|length == 0 %}
+              <tr><td colspan="3" class="muted">Aucune donnée.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:16px;">
+    <div class="card section-gap">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">Par site</h3>
+        <div class="muted">{{ currency }}</div>
+      </div>
+      <div class="table-wrap" style="margin-top:10px;">
+        <table class="table">
+          <thead>
+            <tr><th>Site</th><th style="text-align:right;">Montant</th><th style="text-align:right;">Nb</th></tr>
+          </thead>
+          <tbody>
+            {% for r in by_site %}
+              <tr>
+                <td>{{ r.key }}</td>
+                <td style="text-align:right;">{{ "%.2f"|format(r.total) }}</td>
+                <td style="text-align:right;">{{ r.count }}</td>
+              </tr>
+            {% endfor %}
+            {% if by_site|length == 0 %}
+              <tr><td colspan="3" class="muted">Aucune donnée.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card section-gap">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">Par rubrique cashflow</h3>
+        <div class="muted">{{ currency }}</div>
+      </div>
+      <div class="table-wrap" style="margin-top:10px;">
+        <table class="table">
+          <thead>
+            <tr><th>Rubrique</th><th style="text-align:right;">Montant</th><th style="text-align:right;">Nb</th></tr>
+          </thead>
+          <tbody>
+            {% for r in by_rubrique %}
+              <tr>
+                <td>{{ r.key }}</td>
+                <td style="text-align:right;">{{ "%.2f"|format(r.total) }}</td>
+                <td style="text-align:right;">{{ r.count }}</td>
+              </tr>
+            {% endfor %}
+            {% if by_rubrique|length == 0 %}
+              <tr><td colspan="3" class="muted">Aucune donnée.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}

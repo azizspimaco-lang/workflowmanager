@@ -1,0 +1,113 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+
+  <div class="card section-gap" style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h1 style="margin:0;">Relevés bancaires</h1>
+      <div class="muted">Import CSV/XLSX • Date valeur = cash réel • Anti-doublon</div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <a class="btn-secondary" href="/matching">✨ Matching assisté</a>
+      {% if only_unmatched %}
+        <a class="btn-secondary" href="/releves">Afficher tout</a>
+      {% else %}
+        <a class="btn-secondary" href="/releves?unmatched=1">Seulement non matchés</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if msg %}
+  <div class="card" style="margin-top:12px;">
+    <div class="muted">Message: <b>{{ msg }}</b></div>
+  </div>
+  {% endif %}
+
+  <div class="card section-gap" style="margin-top:12px;">
+    <h3 style="margin:0 0 10px;">Importer un relevé</h3>
+    <form method="post" action="/releves/import" enctype="multipart/form-data" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div>
+        <label class="muted">Banque</label><br/>
+        <input name="bank_name" placeholder="BMCE / BOA / ..." style="min-width:180px;" />
+      </div>
+      <div>
+        <label class="muted">Compte</label><br/>
+        <input name="account_no" placeholder="RIB / Compte" style="min-width:220px;" />
+      </div>
+      <div>
+        <label class="muted">Devise</label><br/>
+        <input name="currency" value="MAD" style="width:90px;" />
+      </div>
+      <div>
+        <label class="muted">Fichier</label><br/>
+        <input type="file" name="file" accept=".csv,.xlsx,.xls" required />
+      </div>
+      <button class="btn btn-primary" type="submit">⬆️ Importer</button>
+    </form>
+  </div>
+
+  <div class="card section-gap" style="margin-top:12px; overflow:auto;">
+    <h3 style="margin:0 0 10px;">Mouvements ({{ txns|length }})</h3>
+
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Date valeur</th>
+          <th>Débit</th>
+          <th>Crédit</th>
+          <th>Libellé</th>
+          <th>Statut</th>
+          <th>Match manuel</th>
+          <th>Classer (hors facture)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in txns %}
+        {% set is_matched = (t.id in matched_ids) %}
+        <tr>
+          <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
+          <td style="text-align:right;">{% if t.debit %}{{ "%.2f"|format(t.debit) }}{% endif %}</td>
+          <td style="text-align:right;">{% if t.credit %}{{ "%.2f"|format(t.credit) }}{% endif %}</td>
+          <td style="max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ t.label }}</td>
+          <td>
+            {% if is_matched %}
+              <span class="badge" style="background:#e8f7ee;">✅ Matché</span>
+            {% else %}
+              <span class="badge" style="background:#fff6e5;">⏳ Non matché</span>
+            {% endif %}
+          </td>
+          <td style="min-width:340px;">
+            <form method="post" action="/matching/manual" style="display:flex; gap:6px; align-items:center;">
+              <input type="hidden" name="banktxn_id" value="{{ t.id }}" />
+              <select name="invoice_id" style="min-width:220px;">
+                {% for inv in invs %}
+                  <option value="{{ inv.id }}">#{{ inv.id }} • {{ inv.supplier_name or "?" }} • {{ inv.invoice_no or "" }} • {{ "%.2f"|format(inv.amount) }}</option>
+                {% endfor %}
+              </select>
+              <input name="matched_amount" placeholder="Montant" style="width:110px;" />
+              <button class="btn" type="submit" {% if is_matched %}disabled{% endif %}>Associer</button>
+              <a class="btn-secondary" href="/matching?txn={{ t.id }}">Suggérer</a>
+            </form>
+          </td>
+          <td style="min-width:300px;">
+            <form method="post" action="/releves/{{ t.id }}/classify" style="display:flex; gap:6px; align-items:center;">
+              <select name="rubrique_id" style="min-width:180px;">
+                {% for r in rubs %}
+                  <option value="{{ r.id }}">{{ r.rubrique }}</option>
+                {% endfor %}
+              </select>
+              <input name="amount" placeholder="Montant" style="width:110px;" />
+              <button class="btn" type="submit">Classer</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+  </div>
+
+</div>
+
+{% endblock %}

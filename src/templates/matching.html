@@ -1,0 +1,136 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+
+  <div class="card section-gap auto-strip" style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h1 style="margin:0;">Matching assisté</h1>
+      <div class="muted">Suggestions automatiques élargies : montant quasi strict, proximité de date et libellé. Les cas très fiables peuvent être appliqués en masse.</div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <a class="btn-secondary" href="/releves">← Relevés</a>
+      <a class="btn-secondary" href="/automation">Centre d'automatisation</a>
+      {% if auto %}
+        <a class="btn-secondary" href="/matching">Mode focus</a>
+      {% else %}
+        <a class="btn btn-primary" href="/matching?auto=1">✨ Proposer tous (80)</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if msg %}
+  <div class="card" style="margin-top:12px;">
+    <div class="muted">Message: <b>{{ msg }}</b></div>
+  </div>
+  {% endif %}
+
+  <div class="auto-grid section-gap">
+    <div class="card">
+      <div class="muted">Mouvements non matchés</div>
+      <div class="auto-big">{{ txns|length }}</div>
+    </div>
+    <div class="card">
+      <div class="muted">Matchings fiables</div>
+      <div class="auto-big">{{ high_conf_matches|length }}</div>
+      <div class="muted">scénarios auto applicables</div>
+    </div>
+    <div class="card" style="grid-column: span 2;">
+      <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
+        <div>
+          <div class="muted">Automatisation ciblée</div>
+          <div style="font-weight:700;">Appliquer automatiquement les cas à forte confiance</div>
+        </div>
+        <form method="post" action="/matching/auto_apply" style="display:flex; gap:8px; align-items:center;">
+          <input type="number" min="1" max="50" name="limit" value="10" style="width:86px;" />
+          <button class="btn btn-primary" type="submit">Auto-appliquer</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {% if high_conf_matches %}
+  <div class="card section-gap" style="margin-top:12px; overflow:auto;">
+    <h3 style="margin:0 0 10px;">Top rapprochements à forte confiance</h3>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Libellé</th>
+          <th style="text-align:right;">Débit</th>
+          <th>Facture</th>
+          <th>Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in high_conf_matches %}
+        <tr>
+          <td>{{ (row.txn.value_date or row.txn.date).date().isoformat() }}</td>
+          <td>{{ row.txn.label }}</td>
+          <td style="text-align:right;">{{ "%.2f"|format(row.txn.debit or 0.0) }}</td>
+          <td><a href="/factures/{{ row.top.inv.id }}">#{{ row.top.inv.id }} · {{ row.top.inv.supplier_name or '—' }} · {{ row.top.inv.invoice_no or '—' }}</a></td>
+          <td><span class="badge">{{ row.top.score }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="card section-gap" style="margin-top:12px; overflow:auto;">
+    <h3 style="margin:0 0 10px;">Mouvements non matchés (débits) ({{ txns|length }})</h3>
+
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Date valeur</th>
+          <th style="text-align:right;">Débit</th>
+          <th>Libellé</th>
+          <th>Suggestions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in txns %}
+        {% set focus = (focus_txn and focus_txn.id == t.id) %}
+        <tr {% if focus %}style="outline:2px solid #e7e7ff;"{% endif %}>
+          <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
+          <td style="text-align:right;">{{ "%.2f"|format(t.debit or 0.0) }}</td>
+          <td style="max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ t.label }}</td>
+          <td style="min-width:560px;">
+
+            {% set sug = suggestions_map.get(t.id) %}
+            {% if sug %}
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                {% for item in sug %}
+                  {% set inv = item.inv %}
+                  <form method="post" action="/matching/manual" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <input type="hidden" name="banktxn_id" value="{{ t.id }}" />
+                    <input type="hidden" name="invoice_id" value="{{ inv.id }}" />
+                    <input type="hidden" name="matched_amount" value="{{ "%.2f"|format(inv.amount or 0.0) }}" />
+                    <span class="badge" style="min-width:58px; text-align:center;">{{ item.score }}</span>
+                    <span style="min-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                      #{{ inv.id }} • {{ inv.supplier_name or '?' }} • {{ inv.invoice_no or '' }}
+                    </span>
+                    <span class="muted" style="min-width:120px; text-align:right;">{{ "%.2f"|format(inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0.0)) }}</span>
+                    <button class="btn" type="submit">Associer</button>
+                    <a class="btn-secondary" href="/factures/{{ inv.id }}" target="_blank">Voir</a>
+                  </form>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div style="display:flex; gap:8px; align-items:center;">
+                <a class="btn-secondary" href="/matching?txn={{ t.id }}">Suggérer</a>
+                <span class="muted">Aucune suggestion fiable pour l’instant</span>
+              </div>
+            {% endif %}
+
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+{% endblock %}

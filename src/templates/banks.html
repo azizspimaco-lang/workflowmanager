@@ -1,0 +1,173 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+  <h1 class="page-title">Banques — Comptes à débiter</h1>
+  
+  {% if msg == "rib_ok" %}
+  <div style="
+    background:#e6f4ea;
+    border:1px solid #b7e1cd;
+    padding:10px;
+    border-radius:8px;
+    margin-bottom:12px;
+    color:#137333;
+    font-weight:600;
+  ">
+    ✅ Attestation RIB ajoutée avec succès
+  </div>
+{% endif %}
+
+{% if msg == "upload_empty" %}
+  <div style="
+    background:#fce8e6;
+    border:1px solid #f28b82;
+    padding:10px;
+    border-radius:8px;
+    margin-bottom:12px;
+    color:#a50e0e;
+    font-weight:600;
+  ">
+    ⚠️ Fichier vide ou non reçu — réessaie l’upload
+  </div>
+{% endif %}
+
+{% if msg == "upload_empty" %}
+  <div style="
+    background:#fce8e6;
+    border:1px solid #f28b82;
+    padding:10px;
+    border-radius:8px;
+    margin-bottom:12px;
+    color:#a50e0e;
+    font-weight:600;
+  ">
+    ❌ Upload vide (aucun fichier reçu)
+  </div>
+{% endif %}
+
+  <div class="card section-gap" style="margin-bottom:12px;">
+    <h3 style="margin:0 0 8px;">Ajouter un compte</h3>
+
+    <form method="post" action="/banks/create" class="form">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Banque</label>
+          <input class="input" name="bank_name" placeholder="Ex: BMCE" required />
+        </div>
+        <div class="form-group">
+          <label>RIB / N° compte</label>
+          <input class="input" name="account_no" placeholder="RIB / Compte" required />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Agence (optionnel)</label>
+          <input class="input" name="agency_name" placeholder="Ex: Maarif" />
+        </div>
+        <div class="form-group">
+          <label>IBAN (optionnel)</label>
+          <input class="input" name="iban" placeholder="IBAN" />
+        </div>
+        <div class="form-group">
+          <label>SWIFT (optionnel)</label>
+          <input class="input" name="swift" placeholder="SWIFT" />
+        </div>
+      </div>
+
+      <button class="btn btn-primary" type="submit">Ajouter</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Comptes</h3>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Banque</th>
+            <th>Compte</th>
+            <th>Agence</th>
+            <th>Actif</th>
+            <th>Attestation RIB</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {% for a in accs %}
+          <tr>
+            <td>{{ a.id }}</td>
+            <td>{{ a.bank_name }}</td>
+            <td>{{ a.account_no }}</td>
+            <td>{{ a.agency_name or "" }}</td>
+            <td>{% if a.is_active %}Oui{% else %}Non{% endif %}</td>
+
+            <!-- ✅ Attestation -->
+            <td>
+              {% if a.attestation_path %}
+                <a class="btn" href="/uploads/{{ a.attestation_path }}" target="_blank" rel="noopener">
+                  📄 Ouvrir
+                </a>
+                <div class="muted" style="margin-top:6px; font-size:12px;">
+                  {{ a.attestation_filename or "attestation" }}
+                </div>
+              {% else %}
+                <span class="muted">Aucune</span>
+              {% endif %}
+
+              <form
+                method="post"
+                action="/banks/{{ a.id }}/upload_attestation"
+                enctype="multipart/form-data"
+                style="margin-top:8px;"
+              >
+                <input
+                  type="file"
+                  name="file"
+                  accept="image/*,application/pdf"
+                  required
+                  style="max-width:230px;"
+                />
+                <button class="btn" type="submit" style="margin-top:6px;">
+                  ⬆️ Upload
+                </button>
+              </form>
+              <form method="post" action="/banks/{{ a.id }}/delete" class="js-delete-companybank" style="display:inline; margin-left:6px;">
+                <button class="btn-danger" type="submit" title="Supprimer">🗑️</button>
+              </form>
+            </td>
+
+            <!-- ✅ Action -->
+            <td>
+              <form method="post" action="/banks/{{ a.id }}/toggle" style="display:inline;">
+                <button class="btn" type="submit">
+                  {% if a.is_active %}Désactiver{% else %}Réactiver{% endif %}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+
+          {% if not accs %}
+          <tr>
+            <td colspan="7" class="muted" style="padding:10px;">
+              Aucun compte.
+            </td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:10px;">
+      <a class="btn" href="/reglements">← Retour Règlements</a>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}

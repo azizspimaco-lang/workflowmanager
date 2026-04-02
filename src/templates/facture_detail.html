@@ -1,0 +1,374 @@
+{# templates/facture_detail.html #}
+{% extends "_base.html" %}
+{% block content %}
+
+{% set today = today if today is defined else None %}
+{% set due = (inv.legal_due_date.date() if inv.legal_due_date else None) %}
+{% set is_paid = ((inv.status or '')|upper == 'PAYEE') %}
+{% set is_cancel = ((inv.status or '')|upper == 'ANNULEE') %}
+{% set overdue = (today and due and due < today and (not is_paid) and (not is_cancel)) %}
+{% set days_late = ((today - due).days if (today and due and due < today) else None) %}
+{% set days_left = ((due - today).days if (today and due and due >= today) else None) %}
+
+<div class="invoice-page">
+
+  <!-- ======= HEADER ======= -->
+  <div class="invoice-hero card">
+    <div class="invoice-hero-top">
+      <div class="invoice-hero-left">
+        <div class="muted" style="font-weight:700;">Factures</div>
+        <div class="invoice-title">
+          {{ inv.supplier_name or "FOURNISSEUR A COMPLETER" }}
+          {% if inv.invoice_no %}<span class="muted">#{{ inv.invoice_no }}</span>{% else %}<span class="muted">#{{ inv.id }}</span>{% endif %}
+        </div>
+
+        <div class="invoice-pills">
+          {# statut #}
+          {% set st = (inv.status or '')|upper %}
+{% if st == 'A_PAYER' %}
+  <form method="post" action="/factures/{{ inv.id }}/update" style="display:inline;">
+    <input type="hidden" name="status" value="A_PAYER">
+    <button class="badge warn" type="submit" style="cursor:pointer; border:none;">
+      💳 A_PAYER
+    </button>
+  </form>
+{% elif st == 'PAYEE' %}
+  <span class="badge ok">✅ PAYEE</span>
+{% elif st == 'ANNULEE' %}
+  <span class="badge neutral">🧾 ANNULEE</span>
+{% else %}
+  <span class="badge neutral">—</span>
+{% endif %}
+
+          {# montant + devise #}
+          <span class="badge neutral">
+            {{ "%.2f"|format((inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0))) }}
+            {{ (inv.currency or 'MAD')|upper }}
+          </span>
+
+          {# échéance #}
+          {% if due %}
+            <span class="badge neutral">📅 {{ due.isoformat() }}</span>
+          {% else %}
+            <span class="badge neutral">📅 —</span>
+          {% endif %}
+
+          {# urgence #}
+          {% if due and overdue %}
+            <span class="badge danger">⛔ RETARD (J+{{ days_late }})</span>
+          {% elif due and (days_left is not none) and days_left <= 7 and (not is_paid) and (not is_cancel) %}
+            <span class="badge info">⏳ À J-{{ days_left }}</span>
+          {% endif %}
+        </div>
+
+        <div class="muted">Compléter / vérifier les champs puis enregistrer.</div>
+      </div>
+
+      <div class="invoice-hero-actions">
+        <a class="btn-secondary" href="/factures">← Retour</a>
+
+        <!-- Marquer payée -->
+        <form method="post" action="/factures/{{ inv.id }}/update" style="display:inline;">
+          <input type="hidden" name="status" value="PAYEE">
+          <input type="hidden" name="payment_date" value="{{ (today.isoformat() if today else '') }}">
+          <button class="btn-primary" type="submit">✅ Marquer payée</button>
+        </form>
+
+        <!-- Annuler -->
+        <form method="post" action="/factures/{{ inv.id }}/update" style="display:inline;">
+          <input type="hidden" name="status" value="ANNULEE">
+          <button class="btn-secondary" type="submit">🧾 Annuler</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= GRID (LEFT / CENTER / RIGHT) ======= -->
+  <div class="invoice-grid">
+
+    <!-- ================= MAIN COLUMN ================= -->
+    <div class="invoice-col">
+
+      <!-- IDENTITE OPERATION -->
+      <div class="card invoice-card">
+        <div class="invoice-card-head">
+          <div class="invoice-card-title">🧾 IDENTITÉ OPÉRATION</div>
+        </div>
+
+        <form method="post" action="/factures/{{ inv.id }}/update" class="invoice-form">
+          <div class="kv-grid">
+            <div class="kv">
+              <div class="kv-k">Fournisseur</div>
+              <div class="kv-v">
+                <input class="input" name="supplier_name" value="{{ inv.supplier_name or '' }}" placeholder="Nom fournisseur">
+              </div>
+            </div>
+
+            <div class="kv">
+              <div class="kv-k">ICE / IF</div>
+              <div class="kv-v" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <input class="input" name="supplier_ice" value="{{ inv.supplier_ice or '' }}" placeholder="ICE">
+                <input class="input" name="supplier_if" value="{{ inv.supplier_if or '' }}" placeholder="IF">
+              </div>
+            </div>
+
+            <div class="kv">
+              <div class="kv-k">Adresse</div>
+              <div class="kv-v">
+                <input class="input" name="supplier_address" value="{{ inv.supplier_address or '' }}" placeholder="Adresse">
+              </div>
+            </div>
+
+            <div class="kv">
+              <div class="kv-k">RC</div>
+              <div class="kv-v" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <input class="input" name="supplier_rc" value="{{ inv.supplier_rc or '' }}" placeholder="RC">
+                <input class="input" name="supplier_rc_city" value="{{ inv.supplier_rc_city or '' }}" placeholder="Ville RC">
+              </div>
+            </div>
+          </div>
+
+          <div class="invoice-actions">
+            <button class="btn-primary" type="submit">💾 Enregistrer</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- PARAMETRES OPERATION -->
+      <div class="card invoice-card">
+        <div class="invoice-card-head">
+          <div class="invoice-card-title">⚙️ PARAMÈTRES OPÉRATION</div>
+        </div>
+
+        <form method="post" action="/factures/{{ inv.id }}/update" class="invoice-form">
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+            <div>
+              <label>Nature opération</label>
+              <select class="input" name="nature_operation">
+                {% set n = (inv.nature_operation or '')|upper %}
+                <option value="" {% if not n %}selected{% endif %}>&mdash;</option>
+                <option value="BIENS" {% if n == 'BIENS' %}selected{% endif %}>BIENS</option>
+                <option value="SERVICES" {% if n == 'SERVICES' %}selected{% endif %}>SERVICES</option>
+                <option value="TRAVAUX" {% if n == 'TRAVAUX' %}selected{% endif %}>TRAVAUX</option>
+              </select>
+            </div>
+
+            <div>
+              <label>Date livraison / service</label>
+              <input class="input" type="date" name="service_date"
+                     value="{{ inv.service_date.date().isoformat() if inv.service_date else '' }}">
+            </div>
+
+            <div>
+              <label>Délai contractuel (jours)</label>
+              <input class="input" type="number" step="1" name="payment_terms_days"
+                     value="{{ inv.payment_terms_days if inv.payment_terms_days is not none else '' }}">
+            </div>
+
+            <div>
+              <label>Dérogation ?</label>
+              <label style="display:flex; align-items:center; gap:10px; margin:0;">
+                <input type="checkbox" name="derogation_sector" {% if inv.derogation_sector %}checked{% endif %}>
+                <span class="muted" style="font-weight:700;">Oui</span>
+              </label>
+            </div>
+
+            <div>
+              <label>Jours dérogation</label>
+              <input class="input" type="number" step="1" name="derogation_days"
+                     value="{{ inv.derogation_days if inv.derogation_days is not none else '' }}">
+            </div>
+
+            <div>
+              <label>Référence dérogation</label>
+              <input class="input" name="derogation_ref" value="{{ inv.derogation_ref or '' }}" placeholder="Réf">
+            </div>
+          </div>
+
+          <div class="muted" style="margin-top:10px;">
+            Échéance légale :
+            <b>{{ inv.legal_due_date.date().isoformat() if inv.legal_due_date else "—" }}</b>
+            {% if due and overdue %}(retard J+{{ days_late }}){% endif %}
+          </div>
+
+          <div class="invoice-actions">
+            <button class="btn-primary" type="submit">💾 Enregistrer</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- LITIGE -->
+      <div class="card invoice-card">
+        <div class="invoice-card-head">
+          <div class="invoice-card-title">⚠️ LITIGE</div>
+        </div>
+
+        <form method="post" action="/factures/{{ inv.id }}/update" class="invoice-form">
+          <label style="display:flex; align-items:center; gap:10px; margin-top:6px;">
+            <input type="checkbox" name="is_disputed" {% if inv.is_disputed %}checked{% endif %}>
+            <span>Facture en litige</span>
+          </label>
+
+          <div style="margin-top:10px;">
+            <label>Motif (optionnel)</label>
+            <input class="input" name="dispute_reason" value="{{ inv.dispute_reason or '' }}">
+          </div>
+
+          <div style="margin-top:10px;">
+            <label>Montant litigé (optionnel)</label>
+            <input class="input" type="number" step="0.01" name="disputed_amount"
+                   value="{{ inv.disputed_amount if inv.disputed_amount is not none else '' }}">
+          </div>
+
+          <div class="invoice-actions">
+            <button class="btn-secondary" type="submit">Enregistrer litige</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- MONTANTS -->
+      <div class="card invoice-card">
+        <div class="invoice-card-head">
+          <div class="invoice-card-title">💰 MONTANTS</div>
+        </div>
+
+        <form method="post" action="/factures/{{ inv.id }}/update" class="invoice-form">
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+            <div>
+              <label>Montant HT</label>
+              <input class="input" type="number" step="0.01" name="amount_ht"
+                     value="{{ inv.amount_ht | mad if inv.amount_ht is not none else '' }}">
+            </div>
+            <div>
+              <label>TVA %</label>
+              <input class="input" type="number" step="0.01" name="vat_rate"
+                     value="{{ inv.vat_rate if inv.vat_rate is not none else '' }}">
+            </div>
+            <div>
+              <label>Montant TVA</label>
+              <input class="input" type="number" step="0.01" name="amount_vat"
+                     value="{{ inv.amount_vat | mad if inv.amount_vat is not none else '' }}">
+            </div>
+            <div>
+              <label>Montant TTC</label>
+              <input class="input" type="number" step="0.01" name="amount_ttc"
+                     value="{{ (inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0)) | mad }}">
+            </div>
+
+            <div style="grid-column: 1 / -1;">
+              <label>Devise</label>
+              <input class="input" name="currency" value="{{ inv.currency or 'MAD' }}">
+            </div>
+          </div>
+
+          <div class="invoice-actions">
+            <button class="btn-secondary" type="submit">Enregistrer montants</button>
+          </div>
+        </form>
+      </div>
+
+    </div>
+
+    <!-- ================= RIGHT COLUMN ================= -->
+    <div class="invoice-col">
+
+      <!-- DOCS PREVIEW -->
+      <div class="card invoice-card">
+        <div class="invoice-card-head invoice-card-head-split">
+          <div class="invoice-card-title">DOCUMENTS</div>
+          <a class="btn-secondary" href="/factures/{{ inv.id }}/open{% if active_doc %}?doc_id={{ active_doc.id }}{% endif %}" target="_blank" rel="noopener">Ouvrir</a>
+        </div>
+
+        <div class="muted" style="margin-top:6px;">
+          <b>Facture principale :</b><br>
+          {{ inv.file_path or "—" }}
+        </div>
+
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+          <a class="btn-secondary" href="/factures/{{ inv.id }}/open{% if active_doc %}?doc_id={{ active_doc.id }}{% endif %}" target="_blank" rel="noopener">📄 PDF</a>
+          <a class="btn-secondary" href="/factures/{{ inv.id }}/download_pdf" target="_blank" rel="noopener">⬇️ Dossier PDF</a>
+        </div>
+
+        {# preview: active_doc si choisi, sinon fichier principal #}
+        {% if active_doc %}
+          {% set prev_path = active_doc.stored_path %}
+        {% else %}
+          {% set prev_path = inv.file_path %}
+        {% endif %}
+
+        {% if prev_path %}
+          {% set prev_url = "/uploads/" ~ prev_path %}
+          {% set lower = (prev_path or '')|lower %}
+          <div style="margin-top:10px;">
+            {% if lower.endswith(".pdf") %}
+              <iframe src="{{ prev_url }}" class="invoice-preview"></iframe>
+            {% else %}
+              <img src="{{ prev_url }}" alt="document" class="invoice-preview-img">
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- PIECES JOINTES -->
+      <div class="card invoice-card">
+        <div class="invoice-card-head">
+          <div class="invoice-card-title">🧷 PIÈCES JOINTES</div>
+        </div>
+
+        <div class="muted">
+          {% if docs %}{{ docs|length }} pièce(s){% else %}0 pièce(s){% endif %}
+        </div>
+
+        {% if docs and docs|length > 0 %}
+          <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+            {% for d in docs %}
+              <a class="btn-secondary"
+                 href="/factures/{{ inv.id }}?doc_id={{ d.id }}"
+                 style="justify-content:space-between;">
+                <span><b>{{ d.doc_type }}</b> — {{ d.filename }}</span>
+                <span class="muted">👁️</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="muted" style="margin-top:8px;">Aucune pièce jointe.</div>
+        {% endif %}
+
+        <div style="margin-top:12px;">
+          <form id="addDocsForm" method="post" action="/factures/{{ inv.id }}/add_docs"
+                enctype="multipart/form-data" class="uploadbar">
+            <div class="upload-left">
+              <label for="add_files">Ajouter document(s)</label>
+              <input id="add_files" name="files" type="file" multiple
+                     accept="image/*,application/pdf" required class="file-input" />
+              <p class="help-text">Ajoute BC/BR après coup. L’IA classe et complète la fiche.</p>
+            </div>
+            <div class="upload-right">
+              <button type="submit" class="btn-primary" id="addDocsBtn">
+                <span class="btn-text">Ajouter</span>
+                <span class="btn-spinner" aria-hidden="true"></span>
+              </button>
+              <div class="muted" id="addDocsMsg" style="margin-top:6px; display:none;">Upload en cours…</div>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- SUPPRIMER -->
+      <div class="card invoice-card">
+        <div class="invoice-card-head">
+          <div class="invoice-card-title">🗑️ SUPPRIMER</div>
+        </div>
+
+        <form method="post" action="/factures/{{ inv.id }}/delete"
+              onsubmit="return confirm('Supprimer définitivement cette facture ?');">
+          <button class="btn-secondary" type="submit" style="width:100%;">Supprimer définitivement</button>
+        </form>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

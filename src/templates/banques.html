@@ -1,0 +1,87 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+  <h1 class="page-title">Modèles banques — Ordres de virement</h1>
+  <div class="muted" style="margin:-6px 0 14px;">Ici tu définis les banques et le <b>template</b> à utiliser pour générer l’ordre de virement (BOA / BMCE / etc.).</div>
+
+  <div class="card section-gap" style="margin-bottom:12px;">
+    <h3 style="margin:0 0 8px;">Ajouter un modèle</h3>
+
+    <form method="post" action="/banques/create" class="form">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Nom banque</label>
+          <input class="input" name="name" placeholder="Ex: BMCE" required />
+        </div>
+        <div class="form-group">
+          <label>Code template</label>
+          <input class="input" name="template_code" placeholder="Ex: BMCE_VIREMENT" required />
+          <div class="muted" style="margin-top:6px; font-size:12px;">Utilisé par le générateur PDF/CSV.</div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Compte débit (optionnel)</label>
+          <input class="input" name="debit_account" placeholder="RIB / Compte" />
+        </div>
+        <div class="form-group">
+          <label>Agence (optionnel)</label>
+          <input class="input" name="agency" placeholder="Ex: Maarif" />
+        </div>
+        <div class="form-group">
+          <label>Ville (optionnel)</label>
+          <input class="input" name="city" placeholder="Ex: Casablanca" />
+        </div>
+      </div>
+
+      <button class="btn btn-primary" type="submit">Ajouter</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Liste</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Banque</th>
+            <th>Template</th>
+            <th>Compte</th>
+            <th>Agence</th>
+            <th>Ville</th><th style="width:80px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in banks %}
+          <tr>
+            <td>{{ b.id }}</td>
+            <td><b>{{ b.name }}</b></td>
+            <td><span class="badge">{{ b.template_code }}</span></td>
+            <td>{{ b.debit_account or "" }}</td>
+            <td>{{ b.agency or "" }}</td>
+            <td>{{ b.city or "" }}</td>
+            <td>
+              <form method="post" action="/banques/{{ b.id }}/delete" class="js-delete-banktpl" style="display:inline;">
+                <button class="btn-danger" type="submit" title="Supprimer">🗑️</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not banks %}
+          <tr><td colspan="6" class="muted" style="padding:10px;">Aucun modèle.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+      <a class="btn" href="/reglements">← Retour Ordres de virement</a>
+      <a class="btn" href="/banks">Comptes société</a>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,78 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+  <h1 class="page-title">Ordres de virement</h1>
+
+  <div class="card section-gap" style="margin-bottom:12px;">
+    <h3 style="margin:0 0 10px;">Créer un ordre de virement</h3>
+
+<form method="post" action="/reglements/create" class="form">
+  <label>Compte à débiter</label>
+  <select name="account_id" required class="input">
+    <option value="">— Choisir —</option>
+    {% for a in accs %}
+      <option value="{{ a.id }}">
+        {{ a.bank_name }} — {{ a.account_no }}{% if a.agency_name %} ({{ a.agency_name }}){% endif %}
+      </option>
+    {% endfor %}
+  </select>
+
+  <label style="margin-top:10px;">Date d’exécution</label>
+  <input type="date" name="payment_date" class="input" value="{{ today }}"/>
+
+  <button class="btn btn-primary" type="submit" style="margin-top:12px;">Créer</button>
+
+  <div class="muted" style="margin-top:8px;">
+    Gérer les comptes ? <a href="/banks">Ouvrir “Banques”</a>
+  </div>
+</form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Historique</h3>
+
+    <table style="width:100%; border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">ID</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Banque</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Compte</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Date</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Total</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Statut</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;"></th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {% for b in batches %}
+          <tr>
+            <td style="padding:8px; border-bottom:1px solid #eee;">#{{ b.id }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.bank_name }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.debit_account }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.payment_date.date().isoformat() }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">{{ "%.2f"|format(b.total_amount or 0.0) }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.status }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">
+              <a class="btn-secondary" href="/reglements/{{ b.id }}">Ouvrir</a>
+              {% if (b.status or '').upper() == 'EXPORTED' %}
+              <form method="post" action="/reglements/{{ b.id }}/reset_export" class="js-reset-export" style="display:inline; margin-left:6px;">
+                <button class="btn-warning" type="submit" title="Réinitialiser l'export">🔄</button>
+              </form>
+              {% endif %}
+              <form method="post" action="/reglements/{{ b.id }}/delete" class="js-delete-batch" style="display:inline; margin-left:6px;">
+                <button class="btn-danger" type="submit" title="Supprimer l'ordre">🗑️</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted" style="padding:10px;">Aucun ordre pour l’instant.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+{% endblock %}

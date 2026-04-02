@@ -1,0 +1,22 @@
+{% extends "_base.html" %}
+{% block content %}
+<h1>Setup</h1>
+<p>Créer les comptes utilisateurs (à faire une seule fois).</p>
+
+<form method="post" action="/setup/create_user" class="form">
+  <label>Nom d’utilisateur</label>
+  <input name="username" required/>
+  <label>Mot de passe</label>
+  <input name="password" type="password" required/>
+  <button class="btn" type="submit">Créer</button>
+</form>
+
+<h2>Utilisateurs existants</h2>
+<ul>
+  {% for u in users %}
+    <li>{{ u.username }}</li>
+  {% else %}
+    <li>Aucun utilisateur pour le moment.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

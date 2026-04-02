@@ -1,0 +1,122 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Délais de paiement</h1>
+    <div class="page-sub">Déclaration: factures <b>marocaines</b> uniquement (fournisseur non marqué “Étranger”).</div>
+  </div>
+  <div class="page-actions">
+    <a class="btn" href="/delais/export.xlsx">⬇️ Export Excel</a>
+  </div>
+</div>
+
+<div class="bi-top" style="margin-bottom:12px;">
+  <div class="card bi-card bi-kpi kpi-warm">
+    <div class="kpi-label">Montant total (échantillon)</div>
+    <div class="kpi-val"><span class="kpi-num">{{ "%0.2f"|format(kpi_total or 0) }}</span><span class="kpi-cur">MAD*</span></div>
+    <div class="kpi-sub">*montants toutes devises affichés en valeur brute — filtrer par devise dans la table.</div>
+  </div>
+  <div class="card bi-card bi-kpi kpi-danger">
+    <div class="kpi-label">En retard</div>
+    <div class="kpi-val"><span class="kpi-num">{{ "%0.2f"|format(kpi_late_amt or 0) }}</span><span class="kpi-cur">MAD</span></div>
+    <div class="kpi-sub">{{ kpi_late_cnt or 0 }} factures en retard (non payées).</div>
+  </div>
+  <div class="card bi-card bi-kpi">
+    <div class="kpi-label">Champs manquants</div>
+    <div class="kpi-val"><span class="kpi-num">{{ (kpi_missing_due or 0) + (kpi_missing_supplier or 0) }}</span></div>
+    <div class="kpi-sub">{{ kpi_missing_due or 0 }} sans échéance • {{ kpi_missing_supplier or 0 }} sans fournisseur.</div>
+  </div>
+  <div class="card bi-card">
+    <div class="card-hd" style="margin-bottom:0;">
+      <div>
+        <div class="card-title">Aide</div>
+        <div class="card-sub">Exclure étrangers = coche “Étranger” dans Fournisseurs.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card bi-card">
+  <div class="card-hd">
+    <div>
+      <div class="card-title">Lignes ({{ rows|length }})</div>
+      <div class="card-sub">Recherche rapide par fournisseur, facture, BC/BR, devise.</div>
+    </div>
+    <input id="delaisSearch" class="search" placeholder="Rechercher…" />
+  </div>
+
+  <div class="table-wrap">
+    <table class="bi-table" id="delaisTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>IF</th>
+          <th>ICE</th>
+          <th>Fournisseur</th>
+          <th>N° facture</th>
+          <th>BC</th>
+          <th>BR</th>
+          <th>Date facture</th>
+          <th>Nature</th>
+          <th>Échéance légale</th>
+          <th>Date paiement</th>
+          <th class="num">Montant</th>
+          <th>Devise</th>
+          <th>Statut</th>
+          <th style="width:80px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        {% set amt = (r.amount_ttc if r.amount_ttc is not none else r.amount) or 0 %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td>{{ r.supplier_if or "" }}</td>
+          <td>{{ r.supplier_ice or "" }}</td>
+          <td class="left">{{ r.supplier_name or "" }}</td>
+          <td><a href="/factures/{{ r.id }}">{{ r.invoice_no or ("ACHAT #" ~ r.id) }}</a></td>
+          <td>{{ r.bc_no or "" }}</td>
+          <td>{{ r.br_no or "" }}</td>
+          <td>{{ r.invoice_date.strftime("%Y-%m-%d") if r.invoice_date else "" }}</td>
+          <td class="left">{{ r.nature_operation or "" }}</td>
+          <td>{{ r.legal_due_date.strftime("%Y-%m-%d") if r.legal_due_date else "" }}</td>
+          <td>{{ r.payment_date.strftime("%Y-%m-%d") if r.payment_date else "" }}</td>
+          <td class="num">{{ "%.2f"|format(amt) }}</td>
+          <td>{{ (r.currency or "MAD")|upper }}</td>
+          <td>{{ (r.status or "")|upper }}</td>
+          <td>
+            <form method="post" action="/factures/{{ r.id }}/delete?next=/delais" class="js-delete-invoice" style="display:inline;">
+              <button class="btn-danger" type="submit" title="Supprimer">🗑️</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="15" class="muted">Aucune facture éligible.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="muted" style="margin-top:10px; font-size:12px;">
+    Astuce: pour une déclaration fiable, compléter <b>Nature</b>, <b>Date début calcul</b>, <b>Échéance légale</b>, et <b>statut PAYEE</b> via Matching bancaire.
+  </div>
+</div>
+
+<script>
+  (function(){
+    const input = document.getElementById('delaisSearch');
+    const table = document.getElementById('delaisTable');
+    if(!input || !table) return;
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    input.addEventListener('input', function(){
+      const q = (input.value||'').toLowerCase().trim();
+      for(const tr of rows){
+        const txt = tr.innerText.toLowerCase();
+        tr.style.display = (!q || txt.includes(q)) ? '' : 'none';
+      }
+    });
+  })();
+</script>
+
+{% endblock %}

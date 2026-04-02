@@ -1,0 +1,40 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="login-wrapper">
+  <div class="login-card">
+
+    <h1 class="login-title">Mini-ERP</h1>
+    <p class="login-sub">Connexion sécurisée</p>
+
+    {# Message d'erreur optionnel (si tu ajoutes ?err=1) #}
+    {% if request.query_params.get("err") %}
+      <div class="alert error" style="margin-bottom:12px;">
+        Identifiants incorrects. Réessaie.
+      </div>
+    {% endif %}
+
+    <form class="login-form" method="post" action="/login">
+      <div class="form-group">
+        <label for="username">Nom d'utilisateur</label>
+        <input class="input" id="username" name="username" type="text"
+               autocomplete="username" required placeholder="ex: admin">
+      </div>
+
+      <div class="form-group">
+        <label for="password">Mot de passe</label>
+        <input class="input" id="password" name="password" type="password"
+               autocomplete="current-password" required placeholder="••••••••">
+      </div>
+
+      <button class="login-btn" type="submit">Se connecter</button>
+
+      <div class="muted" style="margin-top:10px; text-align:center;">
+        Astuce : si tu oublies l’accès, modifie <b>BOOTSTRAP_USER1</b> et <b>BOOTSTRAP_PASS1</b> puis redeploy.
+      </div>
+    </form>
+
+  </div>
+</div>
+
+{% endblock %}

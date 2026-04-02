@@ -944,10 +944,26 @@ def _pdf_first_page_to_png_bytes(pdf_path: str) -> bytes:
 
 
 def _parse_date(s: Optional[str]) -> Optional[datetime]:
+    if s is None or s == "":
+        return None
+    if isinstance(s, datetime):
+        return s
+    try:
+        import datetime as _dt
+        if isinstance(s, _dt.date):
+            return datetime(s.year, s.month, s.day)
+    except Exception:
+        pass
+    s = str(s).strip()
     if not s:
         return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            pass
     try:
-        return datetime.strptime(s, "%Y-%m-%d")
+        return datetime.fromisoformat(s.replace("Z", ""))
     except Exception:
         return None
 
@@ -2393,34 +2409,94 @@ def _guess_csv_delimiter(sample: str) -> str:
     return ","
 
 
+
 def _parse_bank_rows_from_file(content: bytes, filename: str):
-    """Parse CSV/XLSX de relevé en lignes standardisées."""
+    """Parse CSV/XLSX de relevé en lignes standardisées.
+    Gère aussi les relevés Excel sans ligne d'entête (cas BMCE simple :
+    col A=date, col B=débit, col C=crédit, col D=libellé).
+    """
     fn = (filename or "").lower()
     rows = []
 
+    def _is_nonempty(v):
+        return v is not None and str(v).strip() != ""
+
+    def _normalize_debit_credit(dv, cv):
+        dv = float(dv or 0.0)
+        cv = float(cv or 0.0)
+        # certains relevés stockent le débit en négatif dans une seule colonne
+        if dv < 0 and cv == 0:
+            return abs(dv), 0.0
+        if cv < 0 and dv == 0:
+            return abs(cv), 0.0
+        return max(dv, 0.0), max(cv, 0.0)
+
     if fn.endswith(".xlsx") or fn.endswith(".xlsm") or fn.endswith(".xls"):
         wb = openpyxl.load_workbook(filename=BytesIO(content), data_only=True)
-        ws = wb.active
-        data = []
-        for r in ws.iter_rows(values_only=True):
-            data.append([("" if v is None else str(v)) for v in r])
 
-        # chercher header
+        def _sheet_score(ws):
+            sample = list(ws.iter_rows(values_only=True, max_row=min(ws.max_row, 25)))
+            score = 0
+            for r in sample:
+                vals = list(r)
+                if not vals:
+                    continue
+                if len(vals) >= 4:
+                    d = _parse_date(vals[0]) if vals[0] is not None else None
+                    b = _to_float(vals[1]) if len(vals) > 1 else None
+                    c = _to_float(vals[2]) if len(vals) > 2 else None
+                    lbl = str(vals[3]).strip() if len(vals) > 3 and vals[3] is not None else ""
+                    if d:
+                        score += 2
+                    if b is not None or c is not None:
+                        score += 1
+                    if lbl:
+                        score += 1
+            return score
+
+        visible_sheets = [ws for ws in wb.worksheets if ws.sheet_state == "visible"]
+        ws = max(visible_sheets or [wb.active], key=_sheet_score)
+
+        raw_data = [list(r) for r in ws.iter_rows(values_only=True)]
+        data = [[("" if v is None else str(v)) for v in r] for r in raw_data]
+
+        # chercher header standard
         header_idx = None
         for i, r in enumerate(data[:20]):
             joined = " ".join(r).lower()
-            if ("date" in joined and ("libell" in joined or "label" in joined or "motif" in joined)) and ("debit" in joined or "crédit" in joined or "credit" in joined or "montant" in joined):
+            if ("date" in joined and ("libell" in joined or "label" in joined or "motif" in joined)) and ("debit" in joined or "débit" in joined or "crédit" in joined or "credit" in joined or "montant" in joined):
                 header_idx = i
                 break
-        if header_idx is None:
-            header_idx = 0
 
-        headers = [h.strip().lower() for h in data[header_idx]]
-        for r in data[header_idx + 1:]:
-            if not any(str(x).strip() for x in r):
-                continue
-            row = {headers[i]: (r[i] if i < len(r) else "") for i in range(len(headers))}
-            rows.append(row)
+        if header_idx is not None:
+            headers = [h.strip().lower() for h in data[header_idx]]
+            for r in data[header_idx + 1:]:
+                if not any(str(x).strip() for x in r):
+                    continue
+                row = {headers[i]: (r[i] if i < len(r) else "") for i in range(len(headers))}
+                rows.append(row)
+        else:
+            # fallback format simple sans entête : A=date, B=débit, C=crédit, D=libellé, E=solde éventuel
+            for r in raw_data:
+                if not r or len(r) < 4:
+                    continue
+                d = _parse_date(r[0]) if len(r) > 0 else None
+                b = _to_float(r[1]) if len(r) > 1 else None
+                c = _to_float(r[2]) if len(r) > 2 else None
+                lbl = str(r[3]).strip() if len(r) > 3 and r[3] is not None else ""
+                bal = _to_float(r[4]) if len(r) > 4 else None
+                if not d:
+                    continue
+                if (b is None and c is None) or not lbl:
+                    continue
+                rows.append({
+                    "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                    "date valeur": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                    "debit": "" if b is None else str(b),
+                    "credit": "" if c is None else str(c),
+                    "libellé": lbl,
+                    "solde": "" if bal is None else str(bal),
+                })
 
     else:
         txt = content.decode("utf-8", errors="ignore")
@@ -2435,8 +2511,8 @@ def _parse_bank_rows_from_file(content: bytes, filename: str):
     def pick(row: dict, keys: list[str]) -> str:
         for k in keys:
             for kk, vv in row.items():
-                if k in kk:
-                    return (vv or "").strip()
+                if k in str(kk).lower():
+                    return ("" if vv is None else str(vv)).strip()
         return ""
 
     parsed = []
@@ -2456,7 +2532,11 @@ def _parse_bank_rows_from_file(content: bytes, filename: str):
 
         dv = _to_float(debit) or 0.0
         cv = _to_float(credit) or 0.0
+        dv, cv = _normalize_debit_credit(dv, cv)
         bal = _to_float(balance)
+
+        if not label and dv == 0.0 and cv == 0.0:
+            continue
 
         parsed.append(
             {

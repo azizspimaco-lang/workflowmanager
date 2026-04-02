@@ -91,10 +91,11 @@
   <div class="card section-gap" style="margin-top:12px; overflow:auto;">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px;">
       <h3 style="margin:0;">Mouvements ({{ txns|length }})</h3>
-      <form method="post" action="/releves/delete-selected" onsubmit="return confirm('Supprimer les mouvements sélectionnés ? Les mouvements déjà rapprochés ne seront pas supprimés.');" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <form id="bulkDeleteForm" method="post" action="/releves/delete-selected" onsubmit="return confirm('Supprimer les mouvements sélectionnés ? Les mouvements déjà rapprochés ne seront pas supprimés.');" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <button class="btn-secondary" type="button" id="toggleDeleteCandidates">Sélectionner commissions / frais / TVA</button>
         <button class="btn" type="submit">🗑️ Supprimer la sélection</button>
         <span class="muted" style="font-size:12px;">Conseillé pour les commissions, frais bancaires et TVA non rapprochables.</span>
+      </form>
     </div>
 
     <table class="table">
@@ -117,7 +118,7 @@
         <tr>
           <td>
             {% if not is_matched %}
-              <input type="checkbox" class="delete-box" name="txn_ids" value="{{ t.id }}" data-label="{{ (t.label or '')|lower }}" />
+              <input type="checkbox" class="delete-box" form="bulkDeleteForm" name="txn_ids" value="{{ t.id }}" data-label="{{ (t.label or '')|lower }}" />
             {% endif %}
           </td>
           <td>{{ (t.value_date or t.date).date().isoformat() }}</td>

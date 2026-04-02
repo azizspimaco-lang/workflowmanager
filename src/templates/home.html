@@ -39,12 +39,12 @@
   <section class="kpi-grid section-gap">
     <div class="card kpi">
       <div class="muted kpi-label">À payer sous 7 jours</div>
-      <div class="kpi-value">{% if kpi.pay_7 %}{% for cur, amt in kpi.pay_7.items()|list[:1] %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
+      <div class="kpi-value">{% if kpi.pay_7 %}{% for cur, amt in kpi.pay_7.items() %}{% if not loop.first %} · {% endif %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
       <div class="muted">Urgence court terme</div>
     </div>
     <div class="card kpi">
       <div class="muted kpi-label">En retard</div>
-      <div class="kpi-value">{% if kpi.overdue %}{% for cur, amt in kpi.overdue.items()|list[:1] %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
+      <div class="kpi-value">{% if kpi.overdue %}{% for cur, amt in kpi.overdue.items() %}{% if not loop.first %} · {% endif %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
       <div class="muted">Factures à régulariser</div>
     </div>
     <div class="card kpi">

@@ -2537,7 +2537,14 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
 
     rubs = session.exec(select(CashflowRubrique).order_by(CashflowRubrique.rubrique.asc())).all()
 
+    accounts = session.exec(
+        select(CompanyBankAccount)
+        .where(CompanyBankAccount.is_active == True)
+        .order_by(CompanyBankAccount.bank_name.asc(), CompanyBankAccount.account_no.asc())
+    ).all()
+
     msg = request.query_params.get("msg")
+    n = request.query_params.get("n")
     return templates.TemplateResponse(
         "releves.html",
         {
@@ -2547,7 +2554,9 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
             "matched_ids": matched_ids,
             "invs": invs,
             "rubs": rubs,
+            "accounts": accounts,
             "msg": msg,
+            "n": n,
             "only_unmatched": only_unmatched,
         },
     )
@@ -2560,13 +2569,33 @@ async def releves_import(
     bank_name: str = Form(""),
     account_no: str = Form(""),
     currency: str = Form("MAD"),
+    company_bank_account_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
 ):
+    selected_acc = None
+    if company_bank_account_id:
+        selected_acc = session.get(CompanyBankAccount, company_bank_account_id)
+        if not selected_acc:
+            return RedirectResponse("/releves?msg=bad_account", status_code=303)
+        bank_name = selected_acc.bank_name or bank_name
+        account_no = selected_acc.account_no or account_no
+
+    if not (bank_name or "").strip() or not (account_no or "").strip():
+        return RedirectResponse("/releves?msg=missing_account", status_code=303)
+
+    filename = (file.filename or "releve").lower()
+    allowed_ext = (".csv", ".xlsx", ".xls")
+    if not filename.endswith(allowed_ext):
+        return RedirectResponse("/releves?msg=bad_format", status_code=303)
+
     content = await file.read()
     if not content:
         return RedirectResponse("/releves?msg=empty", status_code=303)
 
-    parsed = _parse_bank_rows_from_file(content, file.filename or "releve")
+    try:
+        parsed = _parse_bank_rows_from_file(content, file.filename or "releve")
+    except Exception:
+        return RedirectResponse("/releves?msg=parse_error", status_code=303)
 
     inserted = 0
     for r in parsed:
@@ -2575,7 +2604,6 @@ async def releves_import(
         label = (r["label"] or "").strip()[:400]
         label_norm = _norm_label(label)[:400]
 
-        # montant (debit/credit)
         amt = float(r.get("debit") or 0.0) if float(r.get("debit") or 0.0) > 0 else float(r.get("credit") or 0.0)
 
         dedup = _make_banktxn_dedup_key(bank_name, account_no, vd, amt, label_norm)

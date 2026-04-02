@@ -18,22 +18,41 @@
     </div>
   </div>
 
+  {% set msg_texts = {
+    'import_ok': 'Relevé importé avec succès.',
+    'empty': 'Le fichier importé est vide.',
+    'bad_format': 'Format non supporté. Merci d'importer un fichier CSV ou Excel (.xlsx/.xls).',
+    'parse_error': 'Le fichier n'a pas pu être lu. Vérifie le format et la structure du relevé.',
+    'missing_account': 'Sélectionne d'abord une banque et un compte configurés dans le module Banques.',
+    'bad_account': 'Le compte bancaire sélectionné est introuvable ou inactif.'
+  } %}
   {% if msg %}
-  <div class="card" style="margin-top:12px;">
-    <div class="muted">Message: <b>{{ msg }}</b></div>
+  <div class="card" style="margin-top:12px; border-left:4px solid {% if msg == 'import_ok' %}#10b981{% else %}#ef4444{% endif %};">
+    <div><b>{{ msg_texts.get(msg, msg) }}</b>{% if msg == 'import_ok' and n %} {{ n }} mouvement(s) inséré(s).{% endif %}</div>
   </div>
   {% endif %}
 
   <div class="card section-gap" style="margin-top:12px;">
     <h3 style="margin:0 0 10px;">Importer un relevé</h3>
+    {% if accounts %}
     <form method="post" action="/releves/import" enctype="multipart/form-data" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
       <div>
         <label class="muted">Banque</label><br/>
-        <input name="bank_name" placeholder="BMCE / BOA / ..." style="min-width:180px;" />
+        <select id="bank_select" style="min-width:220px;">
+          <option value="">Choisir une banque</option>
+          {% for bank_name in accounts|map(attribute='bank_name')|unique|list %}
+            <option value="{{ bank_name }}">{{ bank_name }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div>
         <label class="muted">Compte</label><br/>
-        <input name="account_no" placeholder="RIB / Compte" style="min-width:220px;" />
+        <select id="company_bank_account_id" name="company_bank_account_id" required style="min-width:320px;">
+          <option value="">Choisir un compte</option>
+          {% for acc in accounts %}
+            <option value="{{ acc.id }}" data-bank="{{ acc.bank_name }}">{{ acc.bank_name }} — {{ acc.account_no }}{% if acc.iban %} — {{ acc.iban }}{% endif %}</option>
+          {% endfor %}
+        </select>
       </div>
       <div>
         <label class="muted">Devise</label><br/>
@@ -42,9 +61,17 @@
       <div>
         <label class="muted">Fichier</label><br/>
         <input type="file" name="file" accept=".csv,.xlsx,.xls" required />
+        <div class="muted" style="margin-top:4px; font-size:12px;">PDF non accepté dans ce module.</div>
       </div>
       <button class="btn btn-primary" type="submit">⬆️ Importer</button>
     </form>
+    <div class="muted" style="margin-top:10px;">La banque et le compte proviennent des comptes société configurés dans le module Banques.</div>
+    {% else %}
+    <div class="card" style="background:#fff7ed; border:1px solid #fdba74;">
+      <div><b>Aucun compte bancaire configuré.</b></div>
+      <div class="muted" style="margin-top:4px;">Ajoute d'abord un compte dans le module <a href="/banks">Banques</a>, puis reviens ici pour importer un relevé.</div>
+    </div>
+    {% endif %}
   </div>
 
   <div class="card section-gap" style="margin-top:12px; overflow:auto;">
@@ -109,5 +136,47 @@
   </div>
 
 </div>
+
+<script>
+(function(){
+  const bankSelect = document.getElementById('bank_select');
+  const accountSelect = document.getElementById('company_bank_account_id');
+  if (!bankSelect || !accountSelect) return;
+  const allOptions = Array.from(accountSelect.querySelectorAll('option')).map(o => ({
+    value: o.value,
+    text: o.text,
+    bank: o.dataset.bank || ''
+  }));
+
+  function rebuild(bank){
+    const current = accountSelect.value;
+    accountSelect.innerHTML = '';
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Choisir un compte';
+    accountSelect.appendChild(empty);
+    allOptions.forEach(opt => {
+      if (!opt.value) return;
+      if (!bank || opt.bank === bank){
+        const el = document.createElement('option');
+        el.value = opt.value;
+        el.textContent = opt.text;
+        el.dataset.bank = opt.bank;
+        if (opt.value === current) el.selected = true;
+        accountSelect.appendChild(el);
+      }
+    });
+  }
+
+  bankSelect.addEventListener('change', function(){
+    rebuild(this.value);
+  });
+
+  accountSelect.addEventListener('change', function(){
+    const selected = this.options[this.selectedIndex];
+    if (selected && selected.dataset.bank) bankSelect.value = selected.dataset.bank;
+  });
+})();
+</script>
 
 {% endblock %}

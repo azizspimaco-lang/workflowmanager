@@ -2753,39 +2753,57 @@ def matching_manual(
     if other_for_inv:
         return _back("inv_already_matched")
 
+    txn_amt = float(txn.debit or 0.0) if float(txn.debit or 0.0) > 0 else float(txn.credit or 0.0)
+    inv_amt = float(inv.amount_ttc or inv.amount or 0.0)
+
     amt = _to_float(matched_amount) if matched_amount else None
-    if amt is None:
-        # défaut = debit si dispo sinon credit
-        amt = float(txn.debit or 0.0) if float(txn.debit or 0.0) > 0 else float(txn.credit or 0.0)
+    if amt is None or float(amt) <= 0:
+        # priorité au montant facture, sinon montant du mouvement
+        amt = inv_amt if inv_amt > 0 else txn_amt
 
-    existing = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == banktxn_id, InvoicePaymentMatch.invoice_id == invoice_id)).first()
-    if existing:
-        existing.matched_amount = float(amt)
-        existing.method = "MANUAL"
-        session.add(existing)
+    try:
+        existing = session.exec(
+            select(InvoicePaymentMatch).where(
+                InvoicePaymentMatch.banktxn_id == banktxn_id,
+                InvoicePaymentMatch.invoice_id == invoice_id,
+            )
+        ).first()
+        if existing:
+            existing.matched_amount = float(amt or 0.0)
+            existing.method = "MANUAL"
+            session.add(existing)
+            session.commit()
+            try:
+                _ensure_cashflow_actual_from_match(session, existing)
+            except Exception:
+                session.rollback()
+            return _back("match_updated")
+
+        m = InvoicePaymentMatch(
+            invoice_id=invoice_id,
+            banktxn_id=banktxn_id,
+            matched_amount=float(amt or 0.0),
+            method="MANUAL",
+        )
+        session.add(m)
         session.commit()
-        _ensure_cashflow_actual_from_match(session, existing)
-        return _back("match_updated")
+        session.refresh(m)
 
-    m = InvoicePaymentMatch(
-        invoice_id=invoice_id,
-        banktxn_id=banktxn_id,
-        matched_amount=float(amt),
-        method="MANUAL",
-    )
-    session.add(m)
-    session.commit()
-    session.refresh(m)
+        # statut facture (si sortie et montant positif)
+        if float(txn.debit or 0.0) > 0 and float(amt or 0.0) > 0:
+            inv.status = "PAYEE"
+            inv.payment_date = (txn.value_date or txn.date)
+            session.add(inv)
+            session.commit()
 
-    # statut facture (si sortie et montant >= TTC)
-    if float(txn.debit or 0.0) > 0 and float(amt) > 0:
-        inv.status = "PAYEE"
-        inv.payment_date = (txn.value_date or txn.date)
-        session.add(inv)
-        session.commit()
-
-    _ensure_cashflow_actual_from_match(session, m)
-    return _back("match_ok")
+        try:
+            _ensure_cashflow_actual_from_match(session, m)
+        except Exception:
+            session.rollback()
+        return _back("match_ok")
+    except Exception:
+        session.rollback()
+        return _back("match_error")
 
 
 # ---------------- MATCHING ASSISTE (suggestions) ----------------

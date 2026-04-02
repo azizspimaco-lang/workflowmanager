@@ -137,7 +137,7 @@
               <input type="hidden" name="banktxn_id" value="{{ t.id }}" />
               <select name="invoice_id" style="min-width:220px;">
                 {% for inv in invs %}
-                  <option value="{{ inv.id }}">#{{ inv.id }} • {{ inv.supplier_name or "?" }} • {{ inv.invoice_no or "" }} • {{ "%.2f"|format(inv.amount) }}</option>
+                  <option value="{{ inv.id }}">#{{ inv.id }} • {{ inv.supplier_name or "?" }} • {{ inv.invoice_no or "" }} • {{ "%.2f"|format(inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0.0)) }}</option>
                 {% endfor %}
               </select>
               <input name="matched_amount" placeholder="Montant" style="width:110px;" />

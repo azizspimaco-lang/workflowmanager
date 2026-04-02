@@ -106,7 +106,7 @@
                   <form method="post" action="/matching/manual" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <input type="hidden" name="banktxn_id" value="{{ t.id }}" />
                     <input type="hidden" name="invoice_id" value="{{ inv.id }}" />
-                    <input type="hidden" name="matched_amount" value="{{ "%.2f"|format(inv.amount or 0.0) }}" />
+                    <input type="hidden" name="matched_amount" value="{{ "%.2f"|format(inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0.0)) }}" />
                     <span class="badge" style="min-width:58px; text-align:center;">{{ item.score }}</span>
                     <span style="min-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                       #{{ inv.id }} • {{ inv.supplier_name or '?' }} • {{ inv.invoice_no or '' }}

@@ -2717,7 +2717,7 @@ def matching_manual(
     request: Request,
     session: Session = Depends(get_session),
     banktxn_id: int = Form(...),
-    invoice_id: int = Form(...),
+    invoice_id: Optional[int] = Form(None),
     matched_amount: Optional[str] = Form(None),
 ):
     def _back(msg_code: str) -> RedirectResponse:
@@ -2726,6 +2726,9 @@ def matching_manual(
             # on reste sur l'écran matching (plus pratique)
             return RedirectResponse(f"/matching?msg={msg_code}", status_code=303)
         return RedirectResponse(f"/releves?msg={msg_code}", status_code=303)
+
+    if invoice_id is None:
+        return _back("missing_invoice")
 
     txn = session.get(BankTxn, banktxn_id)
     inv = session.get(Invoice, invoice_id)
@@ -3295,7 +3298,7 @@ def analytics_allocations(request: Request, session: Session = Depends(get_sessi
 def analytics_allocations_add(
     request: Request,
     session: Session = Depends(get_session),
-    invoice_id: int = Form(...),
+    invoice_id: Optional[int] = Form(None),
     post_id: int = Form(...),
     amount: str = Form(""),
     note: Optional[str] = Form(None),
@@ -3512,7 +3515,7 @@ def budget_allocations(request: Request, session: Session = Depends(get_session)
 def budget_allocations_add(
     request: Request,
     session: Session = Depends(get_session),
-    invoice_id: int = Form(...),
+    invoice_id: Optional[int] = Form(None),
     post_id: int = Form(...),
     amount: str = Form(""),
     note: Optional[str] = Form(None),
@@ -5771,7 +5774,7 @@ def reglements_create(
 def reglements_create_from_invoice(
     request: Request,
     session: Session = Depends(get_session),
-    invoice_id: int = Form(...),
+    invoice_id: Optional[int] = Form(None),
     account_id: int = Form(...),
     payment_date: Optional[str] = Form(None),
     amount: Optional[str] = Form(None),
@@ -5837,7 +5840,7 @@ def reglement_add_line(
     batch_id: int,
     request: Request,
     session: Session = Depends(get_session),
-    invoice_id: int = Form(...),
+    invoice_id: Optional[int] = Form(None),
     amount: Optional[str] = Form(None),
 ):
     batch = session.get(PaymentBatch, batch_id)

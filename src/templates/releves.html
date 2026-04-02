@@ -25,6 +25,7 @@
     "parse_error": "Le fichier n'a pas pu être lu. Vérifie le format et la structure du relevé.",
     "missing_account": "Sélectionne d'abord une banque et un compte configurés dans le module Banques.",
     "bad_account": "Le compte bancaire sélectionné est introuvable ou inactif.",
+    "missing_invoice": "Merci de sélectionner une facture avant d’associer ce mouvement.",
     "delete_one_ok": "Mouvement supprimé avec succès.",
     "delete_blocked_matched": "Impossible de supprimer un mouvement déjà rapproché. Annule d'abord le rapprochement.",
     "delete_ok": "Suppression terminée.",
@@ -133,15 +134,19 @@
             {% endif %}
           </td>
           <td style="min-width:340px;">
-            <form method="post" action="/matching/manual" style="display:flex; gap:6px; align-items:center;">
+            <form method="post" action="/matching/manual" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
               <input type="hidden" name="banktxn_id" value="{{ t.id }}" />
-              <select name="invoice_id" style="min-width:220px;">
-                {% for inv in invs %}
-                  <option value="{{ inv.id }}">#{{ inv.id }} • {{ inv.supplier_name or "?" }} • {{ inv.invoice_no or "" }} • {{ "%.2f"|format(inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0.0)) }}</option>
-                {% endfor %}
+              <select name="invoice_id" required style="min-width:220px;">
+                {% if invs %}
+                  {% for inv in invs %}
+                    <option value="{{ inv.id }}" {% if loop.first %}selected{% endif %}>#{{ inv.id }} • {{ inv.supplier_name or "?" }} • {{ inv.invoice_no or "" }} • {{ "%.2f"|format(inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0.0)) }}</option>
+                  {% endfor %}
+                {% else %}
+                  <option value="">Aucune facture disponible</option>
+                {% endif %}
               </select>
-              <input name="matched_amount" placeholder="Montant" style="width:110px;" />
-              <button class="btn" type="submit" {% if is_matched %}disabled{% endif %}>Associer</button>
+              <input name="matched_amount" placeholder="Montant" value="{{ "%.2f"|format(t.debit or t.credit or 0.0) }}" style="width:110px;" />
+              <button class="btn" type="submit" {% if is_matched or not invs %}disabled{% endif %}>Associer</button>
               <a class="btn-secondary" href="/matching?txn={{ t.id }}">Suggérer</a>
             </form>
           </td>
@@ -160,14 +165,15 @@
             {% if is_matched %}
               <span class="muted" style="font-size:12px;">Protégé</span>
             {% else %}
-              <button class="btn-secondary" type="submit" formaction="/releves/{{ t.id }}/delete" formmethod="post" onclick="return confirm('Supprimer ce mouvement importé ?');">Supprimer</button>
+              <form method="post" action="/releves/{{ t.id }}/delete" style="display:inline;">
+                <button class="btn-secondary" type="submit" onclick="return confirm('Supprimer ce mouvement importé ?');">Supprimer</button>
+              </form>
             {% endif %}
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-    </form>
   </div>
 
 </div>

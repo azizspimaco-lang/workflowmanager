@@ -1635,7 +1635,7 @@ def _build_automation_snapshot(session: Session) -> dict:
         row["recommended_account"] = _recommend_company_account(accounts, bank_balances, row["currency"], row["amount"])
         row["completion"] = _invoice_completion_snapshot(row["invoice"]) if row.get("invoice") else {"score": 0, "missing": []}
 
-    matched_txn_ids = {m.banktxn_id for m in session.exec(select(InvoicePaymentMatch.banktxn_id)).all()}
+    matched_txn_ids = set(session.exec(select(InvoicePaymentMatch.banktxn_id)).all())
     txns = session.exec(
         select(BankTxn)
         .where(BankTxn.debit > 0)
@@ -2879,7 +2879,7 @@ def _suggest_for_txn(txn: BankTxn, invs: list[Invoice], limit: int = 5) -> list[
 def matching_page(request: Request, session: Session = Depends(get_session)):
     user = get_current_user(request, session)
 
-    matched_txn_ids = {m.banktxn_id for m in session.exec(select(InvoicePaymentMatch.banktxn_id)).all()}
+    matched_txn_ids = set(session.exec(select(InvoicePaymentMatch.banktxn_id)).all())
     txns_all = session.exec(
         select(BankTxn)
         .where(BankTxn.debit > 0)

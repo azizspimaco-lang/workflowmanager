@@ -24,11 +24,25 @@
     "bad_format": "Format non supporté. Merci d'importer un fichier CSV ou Excel (.xlsx/.xls).",
     "parse_error": "Le fichier n'a pas pu être lu. Vérifie le format et la structure du relevé.",
     "missing_account": "Sélectionne d'abord une banque et un compte configurés dans le module Banques.",
-    "bad_account": "Le compte bancaire sélectionné est introuvable ou inactif."
+    "bad_account": "Le compte bancaire sélectionné est introuvable ou inactif.",
+    "delete_one_ok": "Mouvement supprimé avec succès.",
+    "delete_blocked_matched": "Impossible de supprimer un mouvement déjà rapproché. Annule d'abord le rapprochement.",
+    "delete_ok": "Suppression terminée.",
+    "no_selection": "Sélectionne au moins un mouvement à supprimer.",
+    "bad_txn": "Mouvement introuvable."
 } %}
   {% if msg %}
-  <div class="card" style="margin-top:12px; border-left:4px solid {% if msg == 'import_ok' %}#10b981{% else %}#ef4444{% endif %};">
-    <div><b>{{ msg_texts.get(msg, msg) }}</b>{% if msg == 'import_ok' and n %} {{ n }} mouvement(s) inséré(s).{% endif %}</div>
+  {% set ok_msgs = ['import_ok', 'delete_one_ok', 'delete_ok'] %}
+  <div class="card" style="margin-top:12px; border-left:4px solid {% if msg in ok_msgs %}#10b981{% else %}#ef4444{% endif %};">
+    <div><b>{{ msg_texts.get(msg, msg) }}</b>
+      {% if msg == 'import_ok' and n %} {{ n }} mouvement(s) inséré(s).{% endif %}
+      {% if msg == 'delete_ok' %}
+        {% if n %} {{ n }} mouvement(s) supprimé(s).{% endif %}
+        {% if request.query_params.get('blocked') and request.query_params.get('blocked') != '0' %}
+          {{ request.query_params.get('blocked') }} ignoré(s) car déjà rapprochés.
+        {% endif %}
+      {% endif %}
+    </div>
   </div>
   {% endif %}
 
@@ -75,11 +89,18 @@
   </div>
 
   <div class="card section-gap" style="margin-top:12px; overflow:auto;">
-    <h3 style="margin:0 0 10px;">Mouvements ({{ txns|length }})</h3>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px;">
+      <h3 style="margin:0;">Mouvements ({{ txns|length }})</h3>
+      <form method="post" action="/releves/delete-selected" onsubmit="return confirm('Supprimer les mouvements sélectionnés ? Les mouvements déjà rapprochés ne seront pas supprimés.');" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button class="btn-secondary" type="button" id="toggleDeleteCandidates">Sélectionner commissions / frais / TVA</button>
+        <button class="btn" type="submit">🗑️ Supprimer la sélection</button>
+        <span class="muted" style="font-size:12px;">Conseillé pour les commissions, frais bancaires et TVA non rapprochables.</span>
+    </div>
 
     <table class="table">
       <thead>
         <tr>
+          <th style="width:36px;"><input type="checkbox" id="checkAllDelete" /></th>
           <th>Date valeur</th>
           <th>Débit</th>
           <th>Crédit</th>
@@ -87,12 +108,18 @@
           <th>Statut</th>
           <th>Match manuel</th>
           <th>Classer (hors facture)</th>
+          <th>Suppression</th>
         </tr>
       </thead>
       <tbody>
         {% for t in txns %}
         {% set is_matched = (t.id in matched_ids) %}
         <tr>
+          <td>
+            {% if not is_matched %}
+              <input type="checkbox" class="delete-box" name="txn_ids" value="{{ t.id }}" data-label="{{ (t.label or '')|lower }}" />
+            {% endif %}
+          </td>
           <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
           <td style="text-align:right;">{% if t.debit %}{{ "%.2f"|format(t.debit) }}{% endif %}</td>
           <td style="text-align:right;">{% if t.credit %}{{ "%.2f"|format(t.credit) }}{% endif %}</td>
@@ -128,11 +155,18 @@
               <button class="btn" type="submit">Classer</button>
             </form>
           </td>
+          <td>
+            {% if is_matched %}
+              <span class="muted" style="font-size:12px;">Protégé</span>
+            {% else %}
+              <button class="btn-secondary" type="submit" formaction="/releves/{{ t.id }}/delete" formmethod="post" onclick="return confirm('Supprimer ce mouvement importé ?');">Supprimer</button>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-
+    </form>
   </div>
 
 </div>
@@ -176,6 +210,30 @@
     const selected = this.options[this.selectedIndex];
     if (selected && selected.dataset.bank) bankSelect.value = selected.dataset.bank;
   });
+
+  const checkAll = document.getElementById('checkAllDelete');
+  const deleteBoxes = Array.from(document.querySelectorAll('.delete-box'));
+  if (checkAll){
+    checkAll.addEventListener('change', function(){
+      deleteBoxes.forEach(b => { b.checked = this.checked; });
+    });
+  }
+
+  const quickSelect = document.getElementById('toggleDeleteCandidates');
+  if (quickSelect){
+    quickSelect.addEventListener('click', function(){
+      const keywords = ['commission', 'commissions', 'frais', 'agios', 'tva', 'taxe', 'commission banque', 'frais bancaires', 'frais tenue', 'frais dossier'];
+      let selected = 0;
+      deleteBoxes.forEach(b => {
+        const label = (b.dataset.label || '');
+        const should = keywords.some(k => label.includes(k));
+        if (should){ b.checked = true; selected += 1; }
+      });
+      if (checkAll){
+        checkAll.checked = deleteBoxes.length > 0 && deleteBoxes.every(b => b.checked);
+      }
+    });
+  }
 })();
 </script>
 

@@ -2950,6 +2950,62 @@ def matching_auto_apply(request: Request, session: Session = Depends(get_session
     return RedirectResponse(f"/matching?auto=1&msg=auto_applied_{applied}", status_code=303)
 
 
+
+
+@app.post("/releves/delete-selected")
+def releves_delete_selected(
+    request: Request,
+    session: Session = Depends(get_session),
+    txn_ids: Optional[list[int]] = Form(None),
+):
+    _ = get_current_user(request, session)
+    ids = [int(x) for x in (txn_ids or []) if str(x).isdigit() or isinstance(x, int)]
+    if not ids:
+        return RedirectResponse("/releves?msg=no_selection", status_code=303)
+
+    deleted = 0
+    blocked = 0
+    for txn_id in ids:
+        txn = session.get(BankTxn, txn_id)
+        if not txn:
+            continue
+        has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+        if has_match:
+            blocked += 1
+            continue
+        # supprimer éventuel classement hors facture lié à ce mouvement
+        cf_rows = session.exec(select(CashflowActual).where(CashflowActual.banktxn_id == txn_id)).all()
+        for cf in cf_rows:
+            session.delete(cf)
+        session.delete(txn)
+        deleted += 1
+    session.commit()
+    return RedirectResponse(f"/releves?msg=delete_ok&n={deleted}&blocked={blocked}", status_code=303)
+
+
+@app.post("/releves/{txn_id}/delete")
+def releves_delete_txn(
+    txn_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    _ = get_current_user(request, session)
+    txn = session.get(BankTxn, txn_id)
+    if not txn:
+        return RedirectResponse("/releves?msg=bad_txn", status_code=303)
+
+    has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+    if has_match:
+        return RedirectResponse("/releves?msg=delete_blocked_matched", status_code=303)
+
+    cf_rows = session.exec(select(CashflowActual).where(CashflowActual.banktxn_id == txn_id)).all()
+    for cf in cf_rows:
+        session.delete(cf)
+    session.delete(txn)
+    session.commit()
+    return RedirectResponse("/releves?msg=delete_one_ok", status_code=303)
+
+
 @app.post("/releves/{txn_id}/classify")
 def releves_classify_txn(
     txn_id: int,

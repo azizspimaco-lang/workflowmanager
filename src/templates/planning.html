@@ -93,7 +93,7 @@
               <div class="muted">{{ ", ".join(row.flags) }}</div>
             {% endif %}
           </td>
-          <td style="text-align:right;">{{ "%.2f"|format(row.amount) }} {{ row.currency }}</td>
+          <td style="text-align:right;">{{ "%.2f"|format(row.amount) }} {{ row.currency }}{% if row.amount_paid %}<div class="muted">Payé {{ "%.2f"|format(row.amount_paid) }} / Total {{ "%.2f"|format(row.gross_amount) }}</div>{% endif %}</td>
           <td>
             {% if row.recommended_account %}
               <div>{{ row.recommended_account.bank_name }}</div>

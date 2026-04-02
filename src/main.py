@@ -9,12 +9,12 @@ import hashlib
 import zipfile
 import unicodedata
 import csv
+import re
 import openpyxl
 from datetime import datetime, timedelta, date
 from typing import Optional
 from io import BytesIO
 
-import openpyxl
 from PIL import Image
 
 from sqlalchemy import text
@@ -64,6 +64,17 @@ except Exception:
         PDF_MERGER_AVAILABLE = False
 
 from .pdf_orders import generate_order_pdf, generate_orders_pdf
+from .services.matching import (
+    apply_invoice_payment_match,
+    candidate_invoices_for_txn,
+    score_match,
+    suggest_for_txn,
+    txn_amount,
+)
+from .services.payment_status import (
+    invoice_outstanding_amount,
+    invoice_total_amount,
+)
 
 from .models import (
     # auth / core
@@ -1432,13 +1443,14 @@ def _merge_extraction_into_invoice(inv: Invoice, data: dict):
 
 
 def _invoice_amount(inv: Invoice) -> float:
-    for cand in (getattr(inv, "amount_ttc", None), getattr(inv, "amount", None)):
-        try:
-            if cand is not None:
-                return float(cand or 0.0)
-        except Exception:
-            pass
-    return 0.0
+    return invoice_total_amount(inv)
+
+
+def _invoice_open_amount(session: Session, inv: Invoice) -> float:
+    try:
+        return invoice_outstanding_amount(session, inv)
+    except Exception:
+        return _invoice_amount(inv)
 
 
 def _invoice_due_date(inv: Invoice) -> Optional[date]:
@@ -1472,9 +1484,9 @@ def _invoice_quality_flags(inv: Invoice) -> list[str]:
     return flags
 
 
-def _invoice_priority_snapshot(inv: Invoice, today: date) -> dict:
+def _invoice_priority_snapshot(inv: Invoice, today: date, session: Optional[Session] = None) -> dict:
     due = _invoice_due_date(inv)
-    amount = _invoice_amount(inv)
+    amount = _invoice_open_amount(session, inv) if session is not None else _invoice_amount(inv)
     cur = ((getattr(inv, "currency", None) or "MAD").strip().upper() or "MAD")
     flags = _invoice_quality_flags(inv)
     days_left = None if not due else (due - today).days
@@ -1531,6 +1543,8 @@ def _invoice_priority_snapshot(inv: Invoice, today: date) -> dict:
         "invoice_no": getattr(inv, "invoice_no", None) or "—",
         "currency": cur,
         "amount": amount,
+        "gross_amount": _invoice_amount(inv),
+        "amount_paid": float(getattr(inv, "amount_paid", 0.0) or 0.0),
         "due": due,
         "days_left": days_left,
         "flags": flags,
@@ -1600,16 +1614,8 @@ def _recommend_company_account(accounts: list[CompanyBankAccount], bank_balances
     return candidates[0] if candidates else None
 
 
-def _candidate_invoices_for_txn(txn: BankTxn, open_invoices: list[Invoice]) -> list[Invoice]:
-    txn_amt = round(_txn_amount(txn), 2)
-    candidates: list[Invoice] = []
-    for inv in open_invoices:
-        inv_amt = round(_invoice_amount(inv), 2)
-        if inv_amt <= 0:
-            continue
-        if abs(inv_amt - txn_amt) <= 0.01 or abs(inv_amt - txn_amt) <= 5.0:
-            candidates.append(inv)
-    return candidates
+def _candidate_invoices_for_txn(session: Session, txn: BankTxn, open_invoices: list[Invoice]) -> list[Invoice]:
+    return candidate_invoices_for_txn(txn, open_invoices, invoice_amount=lambda inv: _invoice_open_amount(session, inv))
 
 
 def _build_automation_snapshot(session: Session) -> dict:
@@ -1621,8 +1627,8 @@ def _build_automation_snapshot(session: Session) -> dict:
     ).all()
     bank_balances = _latest_bank_balances(session)
 
-    open_invoices = session.exec(select(Invoice).where(Invoice.status == "A_PAYER")).all()
-    priority_rows = [_invoice_priority_snapshot(inv, today) for inv in open_invoices]
+    open_invoices = session.exec(select(Invoice).where(Invoice.status.in_(["A_PAYER", "PARTIEL"]))).all()
+    priority_rows = [_invoice_priority_snapshot(inv, today, session=session) for inv in open_invoices]
     priority_rows.sort(
         key=lambda r: (
             -r["score"],
@@ -1646,8 +1652,8 @@ def _build_automation_snapshot(session: Session) -> dict:
 
     high_conf_matches: list[dict] = []
     for txn in unmatched_txns[:80]:
-        candidates = _candidate_invoices_for_txn(txn, open_invoices)
-        suggestions = _suggest_for_txn(txn, candidates, limit=3)
+        candidates = _candidate_invoices_for_txn(session, txn, open_invoices)
+        suggestions = _suggest_for_txn(session, txn, candidates, limit=3)
         if not suggestions:
             continue
         first = suggestions[0]
@@ -1860,7 +1866,7 @@ def home(request: Request, session: Session = Depends(get_session)):
     total_local = 0
     conforme_local = 0
     for inv in invs:
-        if (getattr(inv, "status", "") or "").upper() != "A_PAYER":
+        if (getattr(inv, "status", "") or "").upper() not in ("A_PAYER", "PARTIEL"):
             continue
         if _is_foreign(inv):
             continue
@@ -1878,12 +1884,12 @@ def home(request: Request, session: Session = Depends(get_session)):
     # the frontend will hide it.
 
     def _inv_amount(inv: Invoice) -> float:
-        return float(getattr(inv, "amount_ttc", None) or getattr(inv, "amount", 0.0) or 0.0)
+        return _invoice_open_amount(session, inv)
 
     # Precompute pay <= 60 days by currency
     pay_60_by_cur: dict[str, float] = {}
     for inv in invs:
-        if (getattr(inv, "status", "") or "").upper() != "A_PAYER":
+        if (getattr(inv, "status", "") or "").upper() not in ("A_PAYER", "PARTIEL"):
             continue
         due_dt = getattr(inv, "legal_due_date", None)
         if not due_dt:
@@ -2242,7 +2248,7 @@ def tresorerie_page(request: Request, session: Session = Depends(get_session)):
         return c or "MAD"
 
     def _inv_amount(inv: Invoice) -> float:
-        return float(getattr(inv, "amount_ttc", None) or getattr(inv, "amount", 0.0) or 0.0)
+        return _invoice_open_amount(session, inv)
 
     # map invoice -> account via payment lines if possible
     inv_to_account: dict[int, Optional[int]] = {}
@@ -2281,7 +2287,7 @@ def tresorerie_page(request: Request, session: Session = Depends(get_session)):
     upcoming: list[dict] = []
 
     for inv in invs:
-        if (getattr(inv, "status", "") or "").upper() != "A_PAYER":
+        if (getattr(inv, "status", "") or "").upper() not in ("A_PAYER", "PARTIEL"):
             continue
         due_dt = getattr(inv, "legal_due_date", None)
         if not due_dt:
@@ -2735,34 +2741,11 @@ def matching_manual(
     if not txn or not inv:
         return _back("bad_ids")
 
-    # ---------------- Matching 1:1 (choix ERP) ----------------
-    # Décision: 1 virement = 1 facture (pas de paiements groupés).
-    # Donc: un mouvement bancaire ne peut matcher qu'une seule facture, et inversement.
-    other_for_txn = session.exec(
-        select(InvoicePaymentMatch).where(
-            InvoicePaymentMatch.banktxn_id == banktxn_id,
-            InvoicePaymentMatch.invoice_id != invoice_id,
-        )
-    ).first()
-    if other_for_txn:
-        return _back("txn_already_matched")
-
-    other_for_inv = session.exec(
-        select(InvoicePaymentMatch).where(
-            InvoicePaymentMatch.invoice_id == invoice_id,
-            InvoicePaymentMatch.banktxn_id != banktxn_id,
-        )
-    ).first()
-    if other_for_inv:
-        return _back("inv_already_matched")
-
-    txn_amt = float(txn.debit or 0.0) if float(txn.debit or 0.0) > 0 else float(txn.credit or 0.0)
-    inv_amt = float(inv.amount_ttc or inv.amount or 0.0)
-
+    inv_amt = _invoice_open_amount(session, inv)
     amt = _to_float(matched_amount) if matched_amount else None
     if amt is None or float(amt) <= 0:
         # priorité au montant facture, sinon montant du mouvement
-        amt = inv_amt if inv_amt > 0 else txn_amt
+        amt = inv_amt if inv_amt > 0 else _txn_amount(txn)
 
     try:
         existing = session.exec(
@@ -2771,39 +2754,18 @@ def matching_manual(
                 InvoicePaymentMatch.invoice_id == invoice_id,
             )
         ).first()
-        if existing:
-            existing.matched_amount = float(amt or 0.0)
-            existing.method = "MANUAL"
-            session.add(existing)
-            session.commit()
-            try:
-                _ensure_cashflow_actual_from_match(session, existing)
-            except Exception:
-                session.rollback()
-            return _back("match_updated")
-
-        m = InvoicePaymentMatch(
-            invoice_id=invoice_id,
-            banktxn_id=banktxn_id,
+        apply_invoice_payment_match(
+            session,
+            txn=txn,
+            inv=inv,
             matched_amount=float(amt or 0.0),
             method="MANUAL",
+            ensure_cashflow=_ensure_cashflow_actual_from_match,
         )
-        session.add(m)
-        session.commit()
-        session.refresh(m)
-
-        # statut facture (si sortie et montant positif)
-        if float(txn.debit or 0.0) > 0 and float(amt or 0.0) > 0:
-            inv.status = "PAYEE"
-            inv.payment_date = (txn.value_date or txn.date)
-            session.add(inv)
-            session.commit()
-
-        try:
-            _ensure_cashflow_actual_from_match(session, m)
-        except Exception:
-            session.rollback()
-        return _back("match_ok")
+        return _back("match_updated" if existing else "match_ok")
+    except ValueError as exc:
+        session.rollback()
+        return _back(str(exc))
     except Exception:
         session.rollback()
         return _back("match_error")
@@ -2811,71 +2773,18 @@ def matching_manual(
 
 # ---------------- MATCHING ASSISTE (suggestions) ----------------
 
-def _txn_amount(txn: BankTxn) -> float:
-    d = float(txn.debit or 0.0)
-    c = float(txn.credit or 0.0)
-    if d > 0:
-        return d
-    if c > 0:
-        return c
-    return 0.0
+def _score_match(session: Session, txn: BankTxn, inv: Invoice) -> int:
+    return score_match(txn, inv, normalize_label=_norm_label, invoice_amount=lambda invoice: _invoice_open_amount(session, invoice))
 
 
-def _score_match(txn: BankTxn, inv: Invoice) -> int:
-    """Score simple (0..100) pour proposer un match 1:1."""
-    txn_amt = _txn_amount(txn)
-    inv_amt = float(inv.amount or 0.0)
-    if txn_amt <= 0 or inv_amt <= 0:
-        return 0
-
-    # 1) Montant (strict, car pas de groupés)
-    if abs(txn_amt - inv_amt) > 0.01:
-        return 0
-    score = 70
-
-    # 2) Proximité date (date valeur)
-    dt = (txn.value_date or txn.date).date()
-    tgt = None
-    for cand in (inv.due_date_planned, inv.due_date, inv.invoice_date):
-        if cand:
-            tgt = cand.date()
-            break
-    if tgt:
-        delta = abs((dt - tgt).days)
-        if delta <= 3:
-            score += 20
-        elif delta <= 7:
-            score += 10
-
-    # 3) Libellé vs fournisseur / numéro facture
-    lab = (txn.label_norm or _norm_label(txn.label or ""))
-    if inv.invoice_no:
-        invno = _norm_label(inv.invoice_no)
-        if invno and invno in (lab or ""):
-            score += 10
-    if inv.supplier_name:
-        sup = _norm_label(inv.supplier_name)
-        tok = ""
-        for t in sup.split():
-            if len(t) >= 5:
-                tok = t
-                break
-        if tok and tok in (lab or ""):
-            score += 10
-
-    return int(score)
-
-
-def _suggest_for_txn(txn: BankTxn, invs: list[Invoice], limit: int = 5) -> list[dict]:
-    scored: list[dict] = []
-    for inv in invs:
-        if (inv.status or "").upper() in ("PAYEE", "ANNULEE"):
-            continue
-        s = _score_match(txn, inv)
-        if s > 0:
-            scored.append({"inv": inv, "score": s})
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:limit]
+def _suggest_for_txn(session: Session, txn: BankTxn, invs: list[Invoice], limit: int = 5) -> list[dict]:
+    return suggest_for_txn(
+        txn,
+        invs,
+        normalize_label=_norm_label,
+        invoice_amount=lambda invoice: _invoice_open_amount(session, invoice),
+        limit=limit,
+    )
 
 
 @app.get("/matching", response_class=HTMLResponse)
@@ -2893,7 +2802,7 @@ def matching_page(request: Request, session: Session = Depends(get_session)):
 
     invs = session.exec(
         select(Invoice)
-        .where(Invoice.status == "A_PAYER")
+        .where(Invoice.status.in_(["A_PAYER", "PARTIEL"]))
         .order_by(Invoice.legal_due_date.asc().nullslast(), Invoice.invoice_date.asc().nullslast())
         .limit(1200)
     ).all()
@@ -2906,7 +2815,7 @@ def matching_page(request: Request, session: Session = Depends(get_session)):
     txns_for_scan = txns[:80] if auto else ([focus_txn] if focus_txn else [])
     for t in [x for x in txns_for_scan if x is not None]:
         candidates = _candidate_invoices_for_txn(t, invs)
-        suggestions_map[t.id] = _suggest_for_txn(t, candidates, limit=8 if focus_txn else 5)
+        suggestions_map[t.id] = _suggest_for_txn(session, t, candidates, limit=8 if focus_txn else 5)
 
     automation = _build_automation_snapshot(session)
     high_conf_matches = automation["high_conf_matches"][:20]
@@ -2928,45 +2837,47 @@ def matching_page(request: Request, session: Session = Depends(get_session)):
 
 
 @app.post("/matching/auto_apply")
-def matching_auto_apply(request: Request, session: Session = Depends(get_session), limit: int = Form(10)):
+def matching_auto_apply(request: Request, session: Session = Depends(get_session), limit: str = Form("10")):
     _ = get_current_user(request, session)
     snapshot = _build_automation_snapshot(session)
     applied = 0
 
-    for row in snapshot["high_conf_matches"][: max(1, min(int(limit or 10), 50))]:
+    try:
+        limit_int = int(str(limit or "10").strip())
+    except Exception:
+        limit_int = 10
+    limit_int = max(1, min(limit_int, 50))
+
+    for row in snapshot["high_conf_matches"][:limit_int]:
         txn = row["txn"]
         inv = row["top"]["inv"]
 
         other_for_txn = session.exec(
             select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn.id)
         ).first()
-        other_for_inv = session.exec(
-            select(InvoicePaymentMatch).where(InvoicePaymentMatch.invoice_id == inv.id)
-        ).first()
-        if other_for_txn or other_for_inv:
+        if other_for_txn:
             continue
 
         amt = _txn_amount(txn)
         if amt <= 0:
             continue
 
-        match = InvoicePaymentMatch(
-            invoice_id=inv.id,
-            banktxn_id=txn.id,
-            matched_amount=float(amt),
-            method="AUTO_HIGH_CONF",
-        )
-        session.add(match)
-        session.commit()
-        session.refresh(match)
-
-        inv.status = "PAYEE"
-        inv.payment_date = (txn.value_date or txn.date)
-        session.add(inv)
-        session.commit()
-
-        _ensure_cashflow_actual_from_match(session, match)
-        applied += 1
+        try:
+            apply_invoice_payment_match(
+                session,
+                txn=txn,
+                inv=inv,
+                matched_amount=float(amt),
+                method="AUTO_HIGH_CONF",
+                ensure_cashflow=_ensure_cashflow_actual_from_match,
+            )
+            applied += 1
+        except ValueError:
+            session.rollback()
+            continue
+        except Exception:
+            session.rollback()
+            continue
 
     return RedirectResponse(f"/matching?auto=1&msg=auto_applied_{applied}", status_code=303)
 
@@ -2974,13 +2885,14 @@ def matching_auto_apply(request: Request, session: Session = Depends(get_session
 
 
 @app.post("/releves/delete-selected")
-def releves_delete_selected(
+async def releves_delete_selected(
     request: Request,
     session: Session = Depends(get_session),
-    txn_ids: Optional[list[int]] = Form(None),
 ):
     _ = get_current_user(request, session)
-    ids = [int(x) for x in (txn_ids or []) if str(x).isdigit() or isinstance(x, int)]
+    form = await request.form()
+    raw_ids = form.getlist("txn_ids") if hasattr(form, "getlist") else []
+    ids = [int(str(x)) for x in raw_ids if str(x).isdigit()]
     if not ids:
         return RedirectResponse("/releves?msg=no_selection", status_code=303)
 
@@ -3119,7 +3031,7 @@ def planning_paiement(request: Request, session: Session = Depends(get_session))
             Invoice.invoice_date.desc().nullslast(),
         )
     ).all()
-    invs = [i for i in invs if (i.status or "").upper() == "A_PAYER"]
+    invs = [i for i in invs if (i.status or "").upper() in ("A_PAYER", "PARTIEL")]
 
     accs = session.exec(
         select(CompanyBankAccount)
@@ -3131,7 +3043,7 @@ def planning_paiement(request: Request, session: Session = Depends(get_session))
     rows = []
     totals_by_cur: dict[str, float] = {}
     for inv in invs:
-        snap = _invoice_priority_snapshot(inv, today)
+        snap = _invoice_priority_snapshot(inv, today, session=session)
         due = snap["due"]
         if due and not (today <= due <= horizon_end) and snap["days_left"] is not None and snap["days_left"] > 90:
             continue
@@ -3190,7 +3102,7 @@ def analytics_page(request: Request, session: Session = Depends(get_session)):
 
     invs = [i for i in invs if (_inv_year(i) == year_i)]
     if scope == "open":
-        invs = [i for i in invs if (i.status or "").upper() == "A_PAYER"]
+        invs = [i for i in invs if (i.status or "").upper() in ("A_PAYER", "PARTIEL")]
 
     def amt(i: Invoice) -> float:
         v = i.amount_ttc if i.amount_ttc is not None else i.amount
@@ -4010,10 +3922,7 @@ def _norm_label(s: str) -> str:
 
 def _txn_amount(txn: BankTxn) -> float:
     """Sortie (debit) positive, entrée (credit) positive."""
-    d = float(txn.debit or 0.0)
-    c = float(txn.credit or 0.0)
-    # convention: montant cashflow réel = débit (sortie) ou crédit (entrée)
-    return d if d > 0 else c
+    return txn_amount(txn)
 
 
 def _make_banktxn_dedup_key(bank_name: str, account_no: str, value_date: datetime, amount: float, label_norm: str) -> str:

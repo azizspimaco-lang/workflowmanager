@@ -2687,8 +2687,8 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
         txns = [
             t for t in txns
             if (int(t.id or 0) not in matched_ids)
+            and ((getattr(t, "processing_status", None) or "IMPORTED").strip().upper() not in ("FACTURE", "RAPPROCHEE", "HORS_FACTURE", "QUALIFIEE"))
             and (int(t.id or 0) not in classified_ids)
-            and ((getattr(t, "processing_status", None) or "IMPORTED").strip().upper() not in ("FACTURE", "RAPPROCHEE"))
         ]
     elif view == "matched":
         txns = [

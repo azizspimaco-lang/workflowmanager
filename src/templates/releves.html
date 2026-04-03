@@ -1,0 +1,238 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+
+  <div class="card section-gap" style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h1 style="margin:0;">Relevés bancaires</h1>
+      <div class="muted">Module source : import, normalisation, stockage et suivi des mouvements bancaires.</div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <a class="btn-secondary" href="/matching">Rapprochement & qualification</a>
+      <a class="btn-secondary" href="/budget/allocations">Budget</a>
+      <a class="btn-secondary" href="/analytics/allocations">Analytique</a>
+    </div>
+  </div>
+
+  {% set msg_texts = {
+    "import_ok": "Relevé importé avec succès.",
+    "empty": "Le fichier importé est vide.",
+    "bad_format": "Format non supporté. Merci d'importer un fichier CSV ou Excel (.xlsx/.xls).",
+    "parse_error": "Le fichier n'a pas pu être lu. Vérifie le format et la structure du relevé.",
+    "missing_account": "Sélectionne d'abord une banque et un compte configurés dans le module Banques.",
+    "bad_account": "Le compte bancaire sélectionné est introuvable ou inactif.",
+    "delete_one_ok": "Mouvement supprimé avec succès.",
+    "delete_blocked_matched": "Impossible de supprimer un mouvement déjà rapproché. Annule d'abord le rapprochement.",
+    "delete_ok": "Suppression terminée.",
+    "no_selection": "Sélectionne au moins un mouvement à supprimer.",
+    "bad_txn": "Mouvement introuvable.",
+    "releves_load_error": "Certaines données n'ont pas pu être chargées correctement."
+  } %}
+  {% if msg %}
+  {% set ok_msgs = ['import_ok', 'delete_one_ok', 'delete_ok'] %}
+  <div class="card" style="margin-top:12px; border-left:4px solid {% if msg in ok_msgs %}#10b981{% else %}#ef4444{% endif %};">
+    <div><b>{{ msg_texts.get(msg, msg) }}</b>
+      {% if msg == 'import_ok' and n %} {{ n }} mouvement(s) inséré(s).{% endif %}
+      {% if msg == 'delete_ok' %}
+        {% if n %} {{ n }} mouvement(s) supprimé(s).{% endif %}
+        {% if request.query_params.get('blocked') and request.query_params.get('blocked') != '0' %}
+          {{ request.query_params.get('blocked') }} ignoré(s) car déjà rapprochés.
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card section-gap" style="margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0;">
+    <div style="font-weight:700; margin-bottom:6px;">Organisation figée des modules</div>
+    <div class="muted">
+      Relevés bancaires = import et stockage. Rapprochement & qualification = lien avec factures ou classement hors facture.
+      Budget et Analytique = affectations de gestion. Délais de paiement = alimentés par les factures et les paiements confirmés.
+    </div>
+  </div>
+
+  <div class="card section-gap" style="margin-top:12px;">
+    <h3 style="margin:0 0 10px;">Importer un relevé</h3>
+    {% if accounts %}
+    <form method="post" action="/releves/import" enctype="multipart/form-data" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div>
+        <label class="muted">Banque</label><br/>
+        <select id="bank_select" style="min-width:220px;">
+          <option value="">Choisir une banque</option>
+          {% for bank_name in accounts|map(attribute='bank_name')|unique|list %}
+            <option value="{{ bank_name }}">{{ bank_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="muted">Compte</label><br/>
+        <select id="company_bank_account_id" name="company_bank_account_id" required style="min-width:320px;">
+          <option value="">Choisir un compte</option>
+          {% for acc in accounts %}
+            <option value="{{ acc.id }}" data-bank="{{ acc.bank_name }}">{{ acc.bank_name }} — {{ acc.account_no }}{% if acc.iban %} — {{ acc.iban }}{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="muted">Devise</label><br/>
+        <input name="currency" value="MAD" style="width:90px;" />
+      </div>
+      <div>
+        <label class="muted">Fichier</label><br/>
+        <input type="file" name="file" accept=".csv,.xlsx,.xls" required />
+        <div class="muted" style="margin-top:4px; font-size:12px;">PDF non accepté dans ce module.</div>
+      </div>
+      <button class="btn btn-primary" type="submit">⬆️ Importer</button>
+    </form>
+    <div class="muted" style="margin-top:10px;">La banque et le compte proviennent des comptes société configurés dans le module Banques.</div>
+    {% else %}
+    <div class="card" style="background:#fff7ed; border:1px solid #fdba74;">
+      <div><b>Aucun compte bancaire configuré.</b></div>
+      <div class="muted" style="margin-top:4px;">Ajoute d'abord un compte dans le module <a href="/banks">Banques</a>, puis reviens ici pour importer un relevé.</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card section-gap" style="margin-top:12px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h3 style="margin:0;">Mouvements importés ({{ txns|length }})</h3>
+      <div class="muted">Vue source uniquement. Les traitements se font dans les modules dédiés.</div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <a class="btn-secondary {% if view == 'all' %}active{% endif %}" href="/releves">Tous</a>
+      <a class="btn-secondary {% if view == 'unmatched' %}active{% endif %}" href="/releves?view=unmatched">À classer</a>
+      <a class="btn-secondary {% if view == 'matched' %}active{% endif %}" href="/releves?view=matched">Rapprochés</a>
+      <a class="btn-secondary {% if view == 'classified' %}active{% endif %}" href="/releves?view=classified">Classés hors facture</a>
+    </div>
+  </div>
+
+  <div class="card section-gap" style="margin-top:12px; overflow:auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px;">
+      <div class="muted">Les suppressions restent disponibles ici pour le nettoyage des imports.</div>
+      <form id="bulkDeleteForm" method="post" action="/releves/delete-selected" onsubmit="return confirm('Supprimer les mouvements sélectionnés ? Les mouvements déjà rapprochés ne seront pas supprimés.');" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button class="btn-secondary" type="button" id="toggleDeleteCandidates">Sélectionner commissions / frais / TVA</button>
+        <button class="btn" type="submit">🗑️ Supprimer la sélection</button>
+      </form>
+    </div>
+
+    <table class="table">
+      <thead>
+        <tr>
+          <th style="width:36px;"><input type="checkbox" id="checkAllDelete" /></th>
+          <th>Date valeur</th>
+          <th>Débit</th>
+          <th>Crédit</th>
+          <th>Libellé</th>
+          <th>Statut</th>
+          <th>Traitement</th>
+          <th>Suppression</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in txns %}
+        {% set txn_id = t.id %}
+        {% set state = processing_map.get(txn_id, {'label':'Importé','badge':'#eef2ff'}) %}
+        {% set is_matched = (txn_id in matched_ids) %}
+        {% set is_classified = (txn_id in classified_ids) %}
+        <tr>
+          <td>
+            {% if not is_matched %}
+              <input type="checkbox" class="delete-box" form="bulkDeleteForm" name="txn_ids" value="{{ txn_id }}" data-label="{{ (t.label or '')|lower }}" />
+            {% endif %}
+          </td>
+          <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
+          <td style="text-align:right;">{% if t.debit %}{{ "%.2f"|format(t.debit) }}{% endif %}</td>
+          <td style="text-align:right;">{% if t.credit %}{{ "%.2f"|format(t.credit) }}{% endif %}</td>
+          <td style="max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ t.label }}</td>
+          <td><span class="badge" style="background:{{ state.badge }};">{{ state.label }}</span></td>
+          <td style="min-width:360px;">
+            {% if is_matched %}
+              <a class="btn-secondary" href="/matching">Voir rapprochement</a>
+              <a class="btn-secondary" href="/factures">Voir facture</a>
+            {% elif is_classified %}
+              <form method="post" action="/releves/{{ txn_id }}/to_facture" style="display:inline;">
+                <button class="btn-secondary" type="submit">Affecter aux factures / règlements</button>
+              </form>
+              <a class="btn-secondary" href="/cashflow">Flux réel</a>
+            {% else %}
+              <form method="post" action="/releves/{{ txn_id }}/to_facture" style="display:inline;">
+                <button class="btn" type="submit">Affecter aux factures / règlements</button>
+              </form>
+              <form method="post" action="/releves/{{ txn_id }}/to_hors_facture" style="display:inline; margin-left:6px;">
+                <button class="btn-secondary" type="submit">Classer hors facture</button>
+              </form>
+            {% endif %}
+          </td>
+          <td>
+            {% if is_matched %}
+              <span class="muted" style="font-size:12px;">Protégé</span>
+            {% else %}
+              <form method="post" action="/releves/{{ txn_id }}/delete" style="display:inline;">
+                <button class="btn-secondary" type="submit" onclick="return confirm('Supprimer ce mouvement importé ?');">Supprimer</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  const bankSelect = document.getElementById('bank_select');
+  const accountSelect = document.getElementById('company_bank_account_id');
+  if (bankSelect && accountSelect) {
+    const allOptions = Array.from(accountSelect.querySelectorAll('option')).map(o => ({
+      value: o.value,
+      text: o.text,
+      bank: o.dataset.bank || ''
+    }));
+
+    function rebuild(bank){
+      const current = accountSelect.value;
+      accountSelect.innerHTML = '';
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'Choisir un compte';
+      accountSelect.appendChild(empty);
+      allOptions.forEach(opt => {
+        if (!opt.value) return;
+        if (!bank || opt.bank === bank){
+          const el = document.createElement('option');
+          el.value = opt.value;
+          el.textContent = opt.text;
+          el.dataset.bank = opt.bank;
+          if (opt.value === current) el.selected = true;
+          accountSelect.appendChild(el);
+        }
+      });
+    }
+
+    bankSelect.addEventListener('change', function(){ rebuild(this.value); });
+  }
+
+  const checkAll = document.getElementById('checkAllDelete');
+  if (checkAll) {
+    checkAll.addEventListener('change', function(){
+      document.querySelectorAll('.delete-box').forEach(cb => { cb.checked = !!checkAll.checked; });
+    });
+  }
+
+  const toggle = document.getElementById('toggleDeleteCandidates');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      document.querySelectorAll('.delete-box').forEach(cb => {
+        const label = (cb.dataset.label || '');
+        const looksLikeFee = /commission|frais|agios|tva|taxe|int[eé]r[êe]t/.test(label);
+        cb.checked = looksLikeFee;
+      });
+    });
+  }
+})();
+</script>
+
+{% endblock %}

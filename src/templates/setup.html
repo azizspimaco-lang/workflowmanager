@@ -1,0 +1,39 @@
+{% extends "_base.html" %}
+{% block content %}
+<div class="erp">
+  <div class="card section-gap">
+    <h1 style="margin-top:0;">Initialisation de l'application</h1>
+    <p class="muted">Cette page sert à créer le premier utilisateur quand la base est vide.</p>
+
+    {% if request.query_params.get("err") %}
+      <div class="alert error" style="margin-bottom:12px;">Renseigne un nom d'utilisateur et un mot de passe.</div>
+    {% endif %}
+
+    {% if can_bootstrap %}
+    <form method="post" action="/setup/create_user" class="form">
+      <label>Nom d’utilisateur</label>
+      <input name="username" required/>
+      <label>Mot de passe</label>
+      <input name="password" type="password" required/>
+      <button class="btn btn-primary" type="submit">Créer le premier compte</button>
+    </form>
+    <div class="muted" style="margin-top:12px;">
+      Alternative rapide : définir <b>BOOTSTRAP_USER1</b> et <b>BOOTSTRAP_PASS1</b> dans l'environnement.
+    </div>
+    {% else %}
+    <div class="alert info">Le mode setup est désactivé car au moins un utilisateur existe déjà.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Utilisateurs existants</h2>
+    <ul>
+      {% for u in users %}
+        <li>{{ u.username }}</li>
+      {% else %}
+        <li>Aucun utilisateur pour le moment.</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endblock %}

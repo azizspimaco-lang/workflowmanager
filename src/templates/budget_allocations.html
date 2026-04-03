@@ -1,0 +1,96 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+  <div class="card section-gap" style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h1 style="margin:0;">Affectations budgétaires</h1>
+      <div class="muted">Le budget consomme les montants après qualification métier. Ici on affecte les factures éligibles, séparément des relevés bruts.</div>
+    </div>
+
+    <form method="get" action="/budget/allocations" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <input class="input" type="text" name="q" value="{{ q }}" placeholder="Rechercher (fournisseur, n° facture, BR, BC…)"/>
+      <button class="btn-secondary" type="submit">Rechercher</button>
+      <a class="btn" href="/budget">← Retour Budget</a>
+    </form>
+  </div>
+
+  {% set msg = request.query_params.get("msg") %}
+  {% if msg %}
+  <div class="card" style="margin-top:12px; border-left:4px solid #ef4444;">
+    <div><b>{% if msg == "exceeds_remaining" %}Le montant dépasse le reste à affecter.{% elif msg == "invalid_amount" %}Montant invalide.{% else %}{{ msg }}{% endif %}</b></div>
+  </div>
+  {% endif %}
+
+  <div class="card section-gap">
+    <div class="muted" style="margin-bottom:10px;">
+      Postes budgétaires : <a href="/postes?kind=BUDGET">gérer</a>
+    </div>
+
+    <div style="overflow:auto;">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Fournisseur</th>
+            <th>N° Facture</th>
+            <th>BR</th>
+            <th style="text-align:right;">Total</th>
+            <th style="text-align:right;">Affecté</th>
+            <th style="text-align:right;">Reste</th>
+            <th style="width:420px;">Ajouter affectation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          {% set inv = r.inv %}
+          <tr>
+            <td><a href="/factures/{{ inv.id }}">{{ inv.id }}</a></td>
+            <td>{{ inv.supplier_name or "" }}</td>
+            <td>{{ inv.invoice_no or "" }}</td>
+            <td>{{ inv.br_no or "" }}</td>
+            <td style="text-align:right;">{{ "%.2f"|format(r.total) }}</td>
+            <td style="text-align:right;">{{ "%.2f"|format(r.allocated) }}</td>
+            <td style="text-align:right;"><b>{{ "%.2f"|format(r.remaining) }}</b></td>
+            <td>
+              <form method="post" action="/budget/allocations/add" style="display:flex; gap:8px; align-items:center;">
+                <input type="hidden" name="invoice_id" value="{{ inv.id }}"/>
+                <select class="input" name="post_id" required style="min-width:180px;">
+                  <option value="" disabled selected>Choisir poste</option>
+                  {% for p in posts %}
+                    <option value="{{ p.id }}">{{ (p.code ~ " - " if p.code else "") ~ p.name }}</option>
+                  {% endfor %}
+                </select>
+                <input class="input" name="amount" placeholder="Montant" style="width:110px;" />
+                <input class="input" name="note" placeholder="Note" style="width:120px;" />
+                <button class="btn btn-primary" type="submit">Ajouter</button>
+              </form>
+            </td>
+          </tr>
+
+          {% if inv.alloc_budget_lines is defined %}
+          <tr>
+            <td colspan="8" style="padding-top:0;">
+              <div class="muted" style="margin:6px 0 8px;">Affectations existantes :</div>
+              <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                {% for l in inv.alloc_budget_lines %}
+                  <div class="badge" style="display:flex; gap:8px; align-items:center;">
+                    <span><b>{{ (l.post_code ~ " - " if l.post_code else "") ~ (l.post_name or "") }}</b> : {{ "%.2f"|format(l.amount or 0) }}</span>
+                    <form method="post" action="/budget/allocations/{{ l.id }}/delete" style="display:inline;">
+                      <button class="btn-secondary" type="submit" title="Supprimer">✕</button>
+                    </form>
+                  </div>
+                {% endfor %}
+              </div>
+            </td>
+          </tr>
+          {% endif %}
+
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

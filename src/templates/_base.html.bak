@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Mini-ERP Trésorerie</title>
+  <!-- Pro typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+
+  {% set u = user if user is defined else None %}
+
+  {# ✅ Définir le block content UNE SEULE FOIS #}
+  {% set page_content %}
+    {% block content %}{% endblock %}
+  {% endset %}
+
+  {% if u %}
+  {% set p = request.url.path %}
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-brand">Mini-ERP</div>
+      <div class="sidebar-sub">Trésorerie</div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-group">
+          <div class="nav-title">Dashboard</div>
+          <a class="nav-link {% if p=='/' %}active{% endif %}" href="/">Accueil</a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Achats</div>
+          <a class="nav-link {% if p.startswith('/factures') %}active{% endif %}" href="/factures">Achats</a>
+          <a class="nav-link {% if p.startswith('/docs_list') %}active{% endif %}" href="/docs_list">Documents</a>
+          <a class="nav-link {% if p.startswith('/suppliers') %}active{% endif %}" href="/suppliers">Fournisseurs</a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Trésorerie</div>
+          <a class="nav-link {% if p.startswith('/tresorerie') %}active{% endif %}" href="/tresorerie">Vue trésorerie</a>
+          <a class="nav-link {% if p.startswith('/reglements') %}active{% endif %}" href="/reglements">Ordres de virement</a>
+          <a class="nav-link {% if p.startswith('/releves') %}active{% endif %}" href="/releves">Relevés bancaires</a>
+          <a class="nav-link {% if p.startswith('/matching') %}active{% endif %}" href="/matching">Matching</a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Pilotage</div>
+          <a class="nav-link {% if p.startswith('/cashflow') %}active{% endif %}" href="/cashflow">Cashflow</a>
+          <a class="nav-link {% if p.startswith('/planning') %}active{% endif %}" href="/planning">Planning paiements</a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Conformité</div>
+          <a class="nav-link {% if p.startswith('/delais') %}active{% endif %}" href="/delais">Délais de paiement</a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Paramètres</div>
+          <a class="nav-link {% if p.startswith('/banks') %}active{% endif %}" href="/banks">Comptes société</a>
+          <a class="nav-link {% if p.startswith('/banques') %}active{% endif %}" href="/banques">Modèles OV</a>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-user">👤 {{ u.username }}</div>
+        <a class="nav-link" href="/logout">Logout</a>
+      </div>
+    </aside>
+
+    <div class="app-main">
+      <main class="container {% if request.url.path.startswith('/factures') %}is-wide{% endif %}">
+        {{ page_content }}
+      </main>
+    </div>
+  </div>
+  {% else %}
+  <main class="container">
+    {{ page_content }}
+  </main>
+  {% endif %}
+
+  <!-- JS global (spinners + filtres table factures) -->
+  <script src="/static/app.js" defer></script>
+
+  {% if u %}
+  <!-- Floating assistant widget (all pages) -->
+  <div id="assistFab" class="assist-fab" title="Assistant">🤖</div>
+  <div id="assistModal" class="assist-modal is-hidden" aria-hidden="true">
+    <div class="assist-card">
+      <div class="assist-head">
+        <div>
+          <div class="assist-title">Assistant</div>
+          <div class="assist-sub">Questions sur vos achats, échéances, soldes…</div>
+        </div>
+        <button type="button" id="assistClose" class="assist-close" aria-label="Fermer">✕</button>
+      </div>
+      <div id="assistMsgs" class="assist-msgs">
+        <div class="assist-msg bot">Bonjour 👋 Posez une question (ex: "à payer 7 jours", "solde", "facture FAC-2026-0012").</div>
+      </div>
+      <form id="assistForm" class="assist-form" autocomplete="off">
+        <input id="assistInput" class="assist-input" name="q" placeholder="Écrivez votre question…" />
+        <button class="assist-send" type="submit">Envoyer</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+</body>
+</html>

@@ -1,0 +1,58 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="dashboard">
+
+  <!-- ===== KPI GRID (4 colonnes) ===== -->
+  <div class="kpi-grid">
+    <div class="card kpi-card">
+      <div class="kpi-title">Factures en cours</div>
+      <div class="kpi-value">{{ kpi_invoices }}</div>
+    </div>
+
+    <div class="card kpi-card">
+      <div class="kpi-title">Total à payer</div>
+      <div class="kpi-value">{{ kpi_total_due }}</div>
+    </div>
+
+    <div class="card kpi-card">
+      <div class="kpi-title">Échues</div>
+      <div class="kpi-value">{{ kpi_overdue }}</div>
+    </div>
+
+    <div class="card kpi-card">
+      <div class="kpi-title">Paiements ce mois</div>
+      <div class="kpi-value">{{ kpi_month_paid }}</div>
+    </div>
+  </div>
+
+
+  <!-- ===== SECTION BAS (2 colonnes dédiées) ===== -->
+  <div class="dashboard-bottom-grid">
+
+    <div class="card">
+      <h3>Prochaines échéances</h3>
+      {% for inv in upcoming_invoices %}
+        <div class="row-line">
+          <span>{{ inv.supplier_name }}</span>
+          <span>{{ inv.due_date }}</span>
+          <span>{{ inv.amount }}</span>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <h3>Top factures en cours</h3>
+      {% for inv in top_invoices %}
+        <div class="row-line">
+          <span>{{ inv.supplier_name }}</span>
+          <span>{{ inv.amount }}</span>
+        </div>
+      {% endfor %}
+    </div>
+
+  </div>
+
+</div>
+
+{% endblock %}

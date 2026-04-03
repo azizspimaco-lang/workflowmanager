@@ -1,0 +1,129 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+  <div class="card section-gap" style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h1 style="margin:0;">Planning paiement</h1>
+      <div class="muted">
+        Vue prévisionnelle avancée ({{ horizon_days }} jours) : tri par priorité, recommandations de compte et alertes de qualité.
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <a class="btn-secondary" href="/automation">Centre d'automatisation</a>
+      <a class="btn-secondary" href="/matching?auto=1">✨ Matching assisté</a>
+    </div>
+  </div>
+
+  {% if request.query_params.get('msg') %}
+  <div class="card" style="margin-top:12px;">
+    <div class="muted">Message: <b>{{ request.query_params.get('msg') }}</b></div>
+  </div>
+  {% endif %}
+
+  <div class="auto-grid section-gap">
+    <div class="card">
+      <div class="muted">Critiques</div>
+      <div class="auto-big">{{ summary.critical_count }}</div>
+    </div>
+    <div class="card">
+      <div class="muted">Hautes</div>
+      <div class="auto-big">{{ summary.high_count }}</div>
+    </div>
+    <div class="card">
+      <div class="muted">À fiabiliser</div>
+      <div class="auto-big">{{ summary.missing_count }}</div>
+    </div>
+    <div class="card">
+      <div class="muted">Horizon</div>
+      <div class="auto-big">{{ rows|length }}</div>
+      <div class="muted">factures retenues</div>
+    </div>
+  </div>
+
+  <div class="card section-gap" style="margin-top:12px;">
+    <h3 style="margin:0 0 6px;">Synthèse par devise</h3>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
+      {% for cur, val in summary.totals_by_cur.items() %}
+        <span class="badge">{{ cur }} : {{ "%.2f"|format(val) }}</span>
+      {% endfor %}
+      {% if summary.totals_by_cur|length == 0 %}
+        <span class="muted">—</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card section-gap" style="margin-top:12px; overflow:auto;">
+    <h3 style="margin:0 0 10px;">Échéances priorisées ({{ rows|length }})</h3>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Score</th>
+          <th>Priorité</th>
+          <th>#</th>
+          <th>Fournisseur</th>
+          <th>N° facture</th>
+          <th>Échéance</th>
+          <th>Jours</th>
+          <th style="text-align:right;">Montant</th>
+          <th>Compte conseillé</th>
+          <th>Décision</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td><span class="badge">{{ row.score }}</span></td>
+          <td><span class="badge auto-priority auto-{{ row.label|lower }}">{{ row.label }}</span></td>
+          <td><a href="/factures/{{ row.invoice_id }}">{{ row.invoice_id }}</a></td>
+          <td>{{ row.supplier_name }}</td>
+          <td>{{ row.invoice_no }}</td>
+          <td>{{ row.due.isoformat() if row.due else '—' }}</td>
+          <td>
+            {% if row.days_left is none %}
+              —
+            {% elif row.days_left < 0 %}
+              <span class="badge auto-priority auto-critique">{{ row.days_left }} (retard)</span>
+            {% elif row.days_left <= 7 %}
+              <span class="badge auto-priority auto-haute">{{ row.days_left }} (urgent)</span>
+            {% else %}
+              <span class="muted">{{ row.days_left }}</span>
+            {% endif %}
+            {% if row.flags %}
+              <div class="muted">{{ ", ".join(row.flags) }}</div>
+            {% endif %}
+          </td>
+          <td style="text-align:right;">{{ "%.2f"|format(row.amount) }} {{ row.currency }}{% if row.amount_paid %}<div class="muted">Payé {{ "%.2f"|format(row.amount_paid) }} / Total {{ "%.2f"|format(row.gross_amount) }}</div>{% endif %}</td>
+          <td>
+            {% if row.recommended_account %}
+              <div>{{ row.recommended_account.bank_name }}</div>
+              <div class="muted">{{ row.recommended_account.account_no }}</div>
+              {% if row.recommended_account.balance is not none %}
+                <div class="muted">Solde {{ "%.2f"|format(row.recommended_account.balance) }} {{ row.recommended_account.balance_currency }}</div>
+              {% endif %}
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <form method="post" action="/reglements/create_from_invoice" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+              <input type="hidden" name="invoice_id" value="{{ row.invoice_id }}" />
+              <select name="company_account_id" required style="min-width:220px;">
+                <option value="">Choisir un compte…</option>
+                {% for a in accs %}
+                  <option value="{{ a.id }}" {% if row.recommended_account and row.recommended_account.account.id == a.id %}selected{% endif %}>
+                    {{ a.bank_name }} • {{ a.account_no }}
+                  </option>
+                {% endfor %}
+              </select>
+              <button class="btn" type="submit">Créer OV</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

@@ -5,12 +5,13 @@
 
   <div class="card section-gap auto-strip" style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
     <div>
-      <h1 style="margin:0;">Matching assisté</h1>
-      <div class="muted">Suggestions automatiques élargies : montant quasi strict, proximité de date et libellé. Les cas très fiables peuvent être appliqués en masse.</div>
+      <h1 style="margin:0;">Rapprochement & qualification bancaire</h1>
+      <div class="muted">Ici se fait le traitement métier des mouvements : rapprochement facture ou classement hors facture.</div>
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <a class="btn-secondary" href="/releves">← Relevés</a>
-      <a class="btn-secondary" href="/automation">Centre d'automatisation</a>
+      <a class="btn-secondary" href="/budget/allocations">Budget</a>
+      <a class="btn-secondary" href="/analytics/allocations">Analytique</a>
       {% if auto %}
         <a class="btn-secondary" href="/matching">Mode focus</a>
       {% else %}
@@ -19,33 +20,56 @@
     </div>
   </div>
 
+  {% set msg_texts = {
+    'match_ok': 'Rapprochement enregistré.',
+    'match_updated': 'Rapprochement mis à jour.',
+    'txn_already_matched': 'Ce mouvement est déjà rapproché à une facture.',
+    'txn_already_classified': 'Ce mouvement est déjà classé hors facture.',
+    'missing_invoice': 'Choisis une facture.',
+    'bad_ids': 'Identifiants invalides.',
+    'invalid_amount': 'Montant invalide.',
+    'amount_exceeds_invoice': 'Le montant dépasse le solde ouvert de la facture.',
+    'match_error': 'Le rapprochement a échoué.',
+    'class_ok': 'Flux hors facture qualifié avec succès.',
+    'to_hors_facture': 'Le mouvement a été orienté vers les flux hors facture.',
+    'txn_not_classed_facture': "Le mouvement doit d'abord être affecté aux factures / règlements depuis Relevés.",
+    'amount_exceeds_txn': 'Le montant dépasse le montant du mouvement bancaire.',
+    'unclass_ok': 'Le flux a été reclassé vers les décaissements à rapprocher.'
+  } %}
   {% if msg %}
-  <div class="card" style="margin-top:12px;">
-    <div class="muted">Message: <b>{{ msg }}</b></div>
+  <div class="card" style="margin-top:12px; border-left:4px solid {% if msg in ['match_ok','match_updated','class_ok'] %}#10b981{% else %}#ef4444{% endif %};">
+    <div><b>{{ msg_texts.get(msg, msg) }}</b></div>
   </div>
   {% endif %}
 
+  <div class="card section-gap" style="margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0;">
+    <div class="muted">
+      Règle cible : <b>Relevés</b> stocke, <b>Rapprochement</b> traite, <b>Budget</b> et <b>Analytique</b> affectent,
+      et la <b>déclaration des délais de paiement</b> se nourrit des factures et des paiements confirmés.
+    </div>
+  </div>
+
   <div class="auto-grid section-gap">
     <div class="card">
-      <div class="muted">Mouvements non matchés</div>
+      <div class="muted">Décaissements à rapprocher</div>
       <div class="auto-big">{{ txns|length }}</div>
+    </div>
+    <div class="card">
+      <div class="muted">Flux à qualifier</div>
+      <div class="auto-big">{{ qualified_rows|length }}</div>
+      <div class="muted">inclut frais, virements et autres flux</div>
     </div>
     <div class="card">
       <div class="muted">Matchings fiables</div>
       <div class="auto-big">{{ high_conf_matches|length }}</div>
       <div class="muted">scénarios auto applicables</div>
     </div>
-    <div class="card" style="grid-column: span 2;">
-      <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
-        <div>
-          <div class="muted">Automatisation ciblée</div>
-          <div style="font-weight:700;">Appliquer automatiquement les cas à forte confiance</div>
-        </div>
-        <form method="post" action="/matching/auto_apply" style="display:flex; gap:8px; align-items:center;">
-          <input type="number" min="1" max="50" name="limit" value="10" style="width:86px;" />
-          <button class="btn btn-primary" type="submit">Auto-appliquer</button>
-        </form>
-      </div>
+    <div class="card">
+      <div class="muted">Automatisation ciblée</div>
+      <form method="post" action="/matching/auto_apply" style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+        <input type="number" min="1" max="50" name="limit" value="10" style="width:86px;" />
+        <button class="btn btn-primary" type="submit">Auto-appliquer</button>
+      </form>
     </div>
   </div>
 
@@ -78,15 +102,14 @@
   {% endif %}
 
   <div class="card section-gap" style="margin-top:12px; overflow:auto;">
-    <h3 style="margin:0 0 10px;">Mouvements non matchés (débits) ({{ txns|length }})</h3>
-
+    <h3 style="margin:0 0 10px;">Décaissements à rapprocher avec les factures ({{ txns|length }})</h3>
     <table class="table">
       <thead>
         <tr>
           <th>Date valeur</th>
           <th style="text-align:right;">Débit</th>
           <th>Libellé</th>
-          <th>Suggestions</th>
+          <th>Suggestions / reclassement</th>
         </tr>
       </thead>
       <tbody>
@@ -97,7 +120,6 @@
           <td style="text-align:right;">{{ "%.2f"|format(t.debit or 0.0) }}</td>
           <td style="max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ t.label }}</td>
           <td style="min-width:560px;">
-
             {% set sug = suggestions_map.get(t.id) %}
             {% if sug %}
               <div style="display:flex; flex-direction:column; gap:6px;">
@@ -114,16 +136,77 @@
                     <span class="muted" style="min-width:120px; text-align:right;">{{ "%.2f"|format(inv.amount_ttc if inv.amount_ttc is not none else (inv.amount or 0.0)) }}</span>
                     <button class="btn" type="submit">Associer</button>
                     <a class="btn-secondary" href="/factures/{{ inv.id }}" target="_blank">Voir</a>
+                    <a class="btn-secondary" href="#qualif-{{ t.id }}">Classer hors facture ↓</a>
                   </form>
                 {% endfor %}
               </div>
             {% else %}
-              <div style="display:flex; gap:8px; align-items:center;">
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                 <a class="btn-secondary" href="/matching?txn={{ t.id }}">Suggérer</a>
+                <a class="btn-secondary" href="#qualif-{{ t.id }}">Classer hors facture ↓</a>
                 <span class="muted">Aucune suggestion fiable pour l’instant</span>
               </div>
             {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 
+  <div class="card section-gap" style="margin-top:12px; overflow:auto;">
+    <h3 style="margin:0 0 10px;">Qualification des flux hors facture</h3>
+    <div class="muted" style="margin-bottom:10px;">Pour les frais bancaires, virements internes, taxes, salaires et autres opérations non liées à une facture.</div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Date valeur</th>
+          <th style="text-align:right;">Débit</th>
+          <th style="text-align:right;">Crédit</th>
+          <th>Libellé</th>
+          <th>Statut</th>
+          <th>Qualification</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in qualified_rows %}
+        {% set has_suggestions = (t.id in suggestions_map) %}
+        {% set state = processing_map.get(t.id, {'label':'À traiter','badge':'#fff6e5'}) %}
+        <tr id="qualif-{{ t.id }}">
+          <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
+          <td style="text-align:right;">{% if t.debit %}{{ "%.2f"|format(t.debit) }}{% endif %}</td>
+          <td style="text-align:right;">{% if t.credit %}{{ "%.2f"|format(t.credit) }}{% endif %}</td>
+          <td style="max-width:420px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ t.label }}</td>
+          <td><span class="badge" style="background:{{ state.badge }};">{{ state.label }}</span></td>
+          <td style="min-width:340px;">
+            {% if t.id in classified_ids %}
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <span class="muted">Déjà qualifié</span>
+                <form method="post" action="/matching/{{ t.id }}/unclassify" style="display:inline;">
+                  <button class="btn-secondary" type="submit">Reclasser vers décaissements</button>
+                </form>
+                <a class="btn-secondary" href="/cashflow">Voir flux réel</a>
+              </div>
+            {% elif has_suggestions %}
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <span class="muted">Ce décaissement a aussi des suggestions de factures ci-dessus.</span>
+                <a class="btn-secondary" href="/matching?txn={{ t.id }}">Traiter comme décaissement facture ↑</a>
+              </div>
+            {% else %}
+              <form method="post" action="/releves/{{ t.id }}/classify" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                <select name="rubrique_id" style="min-width:180px;" required>
+                  <option value="" disabled selected>Choisir rubrique</option>
+                  {% for r in rubs %}
+                    <option value="{{ r.id }}">{{ r.rubrique }}</option>
+                  {% endfor %}
+                </select>
+                <input name="amount" placeholder="Montant" value="{{ "%.2f"|format(t.debit if t.debit else (t.credit or 0.0)) }}" style="width:110px;" />
+                <button class="btn" type="submit">Qualifier</button>
+                {% if (t.debit or 0) > 0 %}
+                  <a class="btn-secondary" href="/matching?txn={{ t.id }}">Traiter comme décaissement facture ↑</a>
+                {% endif %}
+              </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

@@ -2819,7 +2819,7 @@ def releve_to_facture(
     txn.processing_status = "FACTURE"
     session.add(txn)
     session.commit()
-    return RedirectResponse(f"/matching?txn={txn_id}", status_code=303)
+    return RedirectResponse("/releves?view=unmatched&msg=to_facture", status_code=303)
 
 
 @app.post("/releves/{txn_id}/to_hors_facture")
@@ -2840,7 +2840,7 @@ def releve_to_hors_facture(
     txn.processing_status = "HORS_FACTURE"
     session.add(txn)
     session.commit()
-    return RedirectResponse("/matching?msg=to_hors_facture", status_code=303)
+    return RedirectResponse("/releves?view=unmatched&msg=to_hors_facture", status_code=303)
 
 
 @app.post("/matching/manual")

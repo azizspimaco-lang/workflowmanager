@@ -2684,11 +2684,26 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
         classified_ids = set()
 
     if view == "unmatched":
-        txns = [t for t in txns if int(t.id or 0) not in matched_ids and int(t.id or 0) not in classified_ids]
+        txns = [
+            t for t in txns
+            if (int(t.id or 0) not in matched_ids)
+            and (int(t.id or 0) not in classified_ids)
+            and ((getattr(t, "processing_status", None) or "IMPORTED").strip().upper() not in ("FACTURE", "RAPPROCHEE"))
+        ]
     elif view == "matched":
-        txns = [t for t in txns if int(t.id or 0) in matched_ids]
+        txns = [
+            t for t in txns
+            if (int(t.id or 0) in matched_ids)
+            or ((getattr(t, "processing_status", None) or "").strip().upper() == "RAPPROCHEE")
+        ]
     elif view == "classified":
-        txns = [t for t in txns if int(t.id or 0) in classified_ids and int(t.id or 0) not in matched_ids]
+        txns = [
+            t for t in txns
+            if (
+                (int(t.id or 0) in classified_ids)
+                or ((getattr(t, "processing_status", None) or "").strip().upper() in ("HORS_FACTURE", "QUALIFIEE"))
+            ) and int(t.id or 0) not in matched_ids
+        ]
 
     try:
         accounts = session.exec(select(CompanyBankAccount)).all()
@@ -2840,7 +2855,7 @@ def releve_to_hors_facture(
     txn.processing_status = "HORS_FACTURE"
     session.add(txn)
     session.commit()
-    return RedirectResponse("/releves?view=unmatched&msg=to_hors_facture", status_code=303)
+    return RedirectResponse("/releves?view=classified&msg=to_hors_facture", status_code=303)
 
 
 @app.post("/matching/manual")

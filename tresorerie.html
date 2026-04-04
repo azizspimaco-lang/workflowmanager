@@ -1,0 +1,118 @@
+{% extends "_base.html" %}
+{% block content %}
+<div class="ux-home">
+  <section class="card hero-guide section-gap">
+    <div>
+      <div class="eyebrow">Accueil guidé</div>
+      <h1 class="dash-title" style="margin-bottom:6px;">Une application plus simple à utiliser</h1>
+      <p class="muted" style="max-width:760px;">L'utilisateur peut commencer par une seule action : ajouter une facture. Ensuite, l'application explique ce qui a été détecté, ce qui manque et ce qu'il faut faire aujourd'hui.</p>
+      <div class="hero-steps">
+        <div class="hero-step"><span>1</span> Ajouter une facture</div>
+        <div class="hero-step"><span>2</span> Vérifier les champs détectés</div>
+        <div class="hero-step"><span>3</span> Préparer le paiement</div>
+      </div>
+    </div>
+    <div class="hero-actions">
+      <a class="btn btn-primary btn-xl" href="/factures">➕ Ajouter une facture</a>
+      <a class="btn-secondary btn-xl" href="/todo">✅ Voir quoi faire aujourd'hui</a>
+    </div>
+  </section>
+
+  <section class="quick-grid section-gap">
+    <a class="card quick-card" href="/factures">
+      <div class="quick-kicker">Action principale</div>
+      <h3>Importer un document</h3>
+      <p class="muted">Facture seule ou dossier complet. L'outil classe FACTURE / BC / BR automatiquement.</p>
+    </a>
+    <a class="card quick-card" href="/automation">
+      <div class="quick-kicker">Vérifications</div>
+      <h3>Corriger les éléments incomplets</h3>
+      <p class="muted">{{ automation.action_buckets.missing_data|length }} dossier(s) nécessitent un complément ou une validation.</p>
+    </a>
+    <a class="card quick-card" href="/planning">
+      <div class="quick-kicker">Paiements</div>
+      <h3>Traiter les urgences</h3>
+      <p class="muted">{{ automation.action_buckets.critical|length }} priorité(s) critique(s) et {{ automation.action_buckets.high|length }} priorité(s) haute(s).</p>
+    </a>
+  </section>
+
+  <section class="kpi-grid section-gap">
+    <div class="card kpi">
+      <div class="muted kpi-label">À payer sous 7 jours</div>
+      <div class="kpi-value">{% if kpi.pay_7 %}{% for cur, amt in kpi.pay_7.items() %}{% if not loop.first %} · {% endif %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
+      <div class="muted">Urgence court terme</div>
+    </div>
+    <div class="card kpi">
+      <div class="muted kpi-label">En retard</div>
+      <div class="kpi-value">{% if kpi.overdue %}{% for cur, amt in kpi.overdue.items() %}{% if not loop.first %} · {% endif %}{{ "{:,.0f}".format(amt).replace(",", " ") }} {{ cur }}{% endfor %}{% else %}0 MAD{% endif %}</div>
+      <div class="muted">Factures à régulariser</div>
+    </div>
+    <div class="card kpi">
+      <div class="muted kpi-label">Conformité délais</div>
+      <div class="kpi-value">{{ compliance_pct }}%</div>
+      <div class="muted">Dossiers avec échéance calculée</div>
+    </div>
+    <div class="card kpi">
+      <div class="muted kpi-label">Matchings fiables</div>
+      <div class="kpi-value">{{ automation.high_conf_matches|length }}</div>
+      <div class="muted">Rapprochements prêts</div>
+    </div>
+  </section>
+
+  <section class="card section-gap">
+    <div class="section-head">
+      <div>
+        <div class="eyebrow">À faire aujourd'hui</div>
+        <h3 style="margin:0;">Priorités visibles en un coup d'œil</h3>
+      </div>
+      <a class="btn-secondary" href="/todo">Ouvrir la page dédiée</a>
+    </div>
+    <div class="todo-preview-grid">
+      <div class="todo-box todo-box-danger">
+        <div class="todo-box-label">Critiques</div>
+        <div class="todo-box-value">{{ automation.action_buckets.critical|length }}</div>
+        <div class="muted">Échéances dépassées ou très proches</div>
+      </div>
+      <div class="todo-box">
+        <div class="todo-box-label">À compléter</div>
+        <div class="todo-box-value">{{ automation.action_buckets.missing_data|length }}</div>
+        <div class="muted">Champs ou pièces manquants</div>
+      </div>
+      <div class="todo-box">
+        <div class="todo-box-label">Paiements à lancer</div>
+        <div class="todo-box-value">{{ automation.action_buckets.recommended_now|length }}</div>
+        <div class="muted">Factures à traiter cette semaine</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card section-gap">
+    <div class="section-head">
+      <div>
+        <div class="eyebrow">Documents proches</div>
+        <h3 style="margin:0;">Prochaines échéances</h3>
+      </div>
+      <a class="btn-secondary" href="/factures">Voir toutes les factures</a>
+    </div>
+    {% if upcoming %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Échéance</th><th>Fournisseur</th><th>Référence</th><th style="text-align:right;">Montant</th></tr></thead>
+        <tbody>
+          {% for row in upcoming[:6] %}
+          <tr>
+            <td>{{ row.due }}</td>
+            <td><a href="/factures/{{ row.id }}">{{ row.supplier }}</a></td>
+            <td>{{ row.ref }}</td>
+            <td style="text-align:right;">{{ "%.2f"|format(row.amount) }} {{ row.currency }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="muted">Aucune facture ouverte détectée.</div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

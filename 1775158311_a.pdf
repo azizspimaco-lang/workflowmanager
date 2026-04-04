@@ -1,0 +1,21 @@
+[
+  "tests/test_app_smoke.py::AppSmokeTests::test_health_endpoint",
+  "tests/test_app_smoke.py::AppSmokeTests::test_matching_manual_route_marks_invoice_paid",
+  "tests/test_matching.py::MatchingServiceTests::test_apply_invoice_payment_match_updates_status_and_date",
+  "tests/test_matching.py::MatchingServiceTests::test_candidate_invoices_uses_amount_ttc_priority",
+  "tests/test_matching.py::MatchingServiceTests::test_score_match_uses_invoice_number_and_supplier",
+  "tests/test_matching.py::MatchingServiceTests::test_txn_amount_prefers_debit_then_credit",
+  "tests/test_regressions_v3.py::AppRegressionV3Tests::test_auto_apply_matches_high_confidence_pair",
+  "tests/test_regressions_v3.py::AppRegressionV3Tests::test_budget_comptable_import_csv",
+  "tests/test_regressions_v3.py::AppRegressionV3Tests::test_delete_selected_removes_multiple_unmatched_rows",
+  "tests/test_regressions_v3.py::AppRegressionV3Tests::test_delete_selected_soft_discards_multiple_unmatched_rows",
+  "tests/test_regressions_v3.py::AppRegressionV3Tests::test_manual_matching_without_invoice_id_redirects_instead_of_422",
+  "tests/test_regressions_v3.py::AppRegressionV3Tests::test_qualification_page_loads_hors_facture_rows",
+  "tests/test_regressions_v3.py::AppRegressionV3Tests::test_releves_import_deduplicates_same_file",
+  "tests/test_v5_partial_payments.py::AppV5PartialAndPlanningTests::test_auto_apply_can_finish_partially_paid_invoice_using_outstanding_amount",
+  "tests/test_v5_partial_payments.py::AppV5PartialAndPlanningTests::test_planning_page_shows_outstanding_amount_for_partial_invoice",
+  "tests/test_v5_partial_payments.py::PartialPaymentServiceTests::test_partial_overpayment_is_blocked",
+  "tests/test_v5_partial_payments.py::PartialPaymentServiceTests::test_partial_then_full_payment_updates_status_and_amount_paid",
+  "tests/test_v6_document_workflow.py::AppV6DocumentWorkflowTests::test_add_docs_commit_with_bc_upgrades_incomplete_invoice_to_bc_recu",
+  "tests/test_v6_document_workflow.py::AppV6DocumentWorkflowTests::test_scan_bundle_commit_with_bc_and_br_sets_status_br_recu"
+]

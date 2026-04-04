@@ -1,0 +1,122 @@
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+  <div class="card section-gap" style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
+    <div>
+      <h1 style="margin:0;">Budget</h1>
+      <div class="muted">Saisie simple par mois + axes (optionnels). Les budgets n'impactent pas les factures : ils servent au pilotage.</div>
+    </div>
+
+    <form method="get" action="/budget" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <label class="muted">Année</label>
+      <input class="input" type="number" name="year" value="{{ year }}" style="width:120px;" />
+      <button class="btn btn-primary" type="submit">Afficher</button>
+    </form>
+      <a class="btn-secondary" href="/budget/allocations">📌 Affectations</a>
+
+  </div>
+
+  <div class="card section-gap">
+    <h3 style="margin:0 0 10px;">Ajouter / mettre à jour une ligne</h3>
+
+    <form method="post" action="/budget/upsert" class="form-grid" style="display:grid; grid-template-columns: repeat(6, minmax(140px, 1fr)); gap:10px; align-items:end;">
+      <input type="hidden" name="year" value="{{ year }}" />
+
+      <div>
+        <label class="muted">Mois</label>
+        <input class="input" type="number" name="month" min="1" max="12" value="{{ now_month }}" />
+      </div>
+      <div>
+        <label class="muted">Montant prévu</label>
+        <input class="input" type="number" step="0.01" name="amount_planned" placeholder="0.00" required />
+      </div>
+      <div>
+        <label class="muted">Devise</label>
+        <input class="input" type="text" name="currency" value="MAD" />
+      </div>
+      <div>
+        <label class="muted">Rubrique</label>
+        <input class="input" type="text" name="cashflow_rubrique" placeholder="ex: Achats" />
+      </div>
+      <div>
+        <label class="muted">Analytique</label>
+        <input class="input" type="text" name="analytic" placeholder="ex: IT" />
+      </div>
+      <div>
+        <label class="muted">Projet</label>
+        <input class="input" type="text" name="project" placeholder="ex: Odoo" />
+      </div>
+
+      <div>
+        <label class="muted">Site</label>
+        <input class="input" type="text" name="site" placeholder="ex: CASA" />
+      </div>
+      <div>
+        <label class="muted">Centre de coût</label>
+        <input class="input" type="text" name="cost_center" placeholder="ex: CC10" />
+      </div>
+      <div style="grid-column: span 2;">
+        <label class="muted">Notes</label>
+        <input class="input" type="text" name="notes" placeholder="optionnel" />
+      </div>
+      <div>
+        <button class="btn btn-primary" type="submit">Enregistrer</button>
+      </div>
+    </form>
+
+    <div class="muted" style="margin-top:10px;">Astuce : une ligne est unique par (année, mois, devise, rubrique, analytique, projet, site, centre de coût). Si elle existe, elle est mise à jour.</div>
+  </div>
+
+  <div class="card section-gap">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h3 style="margin:0;">Budget {{ year }}</h3>
+      <div class="muted">{{ lines|length }} ligne(s)</div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:10px;">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Mois</th>
+            <th>Rubrique</th>
+            <th>Analytique</th>
+            <th>Projet</th>
+            <th>Site</th>
+            <th>CC</th>
+            <th>Devise</th>
+            <th style="text-align:right;">Montant</th>
+            <th>Notes</th>
+            <th style="width:120px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in lines %}
+          <tr>
+            <td>{{ "%02d"|format(b.month) }}</td>
+            <td>{{ b.cashflow_rubrique or '-' }}</td>
+            <td>{{ b.analytic or '-' }}</td>
+            <td>{{ b.project or '-' }}</td>
+            <td>{{ b.site or '-' }}</td>
+            <td>{{ b.cost_center or '-' }}</td>
+            <td>{{ b.currency }}</td>
+            <td style="text-align:right;">{{ "%.2f"|format(b.amount_planned) }}</td>
+            <td>{{ b.notes or '' }}</td>
+            <td>
+              <form method="post" action="/budget/{{ b.id }}/delete" style="display:inline;" onsubmit="return confirm('Supprimer cette ligne budget ?');">
+                <button class="btn-danger" type="submit">Supprimer</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+          {% if lines|length == 0 %}
+            <tr><td colspan="10" class="muted">Aucune ligne budget pour cette année.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}

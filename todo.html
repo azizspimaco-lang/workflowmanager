@@ -1,0 +1,344 @@
+{# templates/factures.html #}
+{% extends "_base.html" %}
+{% block content %}
+
+<div class="erp">
+
+  <!-- Header -->
+  <div class="dash section-gap">
+    <div class="dash-hero">
+      <div>
+        <h1 class="dash-title">Factures</h1>
+        <div class="muted">Importer, classer (FACTURE / BC / BR) et suivre les échéances.</div>
+      </div>
+      <div class="dash-actions">
+        <a class="btn-secondary" href="/docs_list">📁 Documents</a>
+        <a class="btn-secondary" href="/delais">⏱️ Délais</a>
+      </div>
+    </div>
+
+    <!-- KPIs (calculés en JS sur les lignes visibles) -->
+    <div class="kpi-grid">
+      <div class="card kpi">
+        <div class="kpi-top">
+          <div>
+            <div class="muted kpi-label">Total visible</div>
+            <div class="kpi-value" id="kpiTotal">—</div>
+            <div class="muted kpi-sub" id="kpiCount">—</div>
+          </div>
+          <div class="kpi-icon">Σ</div>
+        </div>
+      </div>
+
+      <div class="card kpi">
+        <div class="kpi-top">
+          <div>
+            <div class="muted kpi-label">À payer</div>
+            <div class="kpi-value" id="kpiAPayer">—</div>
+            <div class="muted kpi-sub" id="kpiAPayerCount">—</div>
+          </div>
+          <div class="kpi-icon">💳</div>
+        </div>
+      </div>
+
+      <div class="card kpi">
+        <div class="kpi-top">
+          <div>
+            <div class="muted kpi-label">Payées</div>
+            <div class="kpi-value" id="kpiPayee">—</div>
+            <div class="muted kpi-sub" id="kpiPayeeCount">—</div>
+          </div>
+          <div class="kpi-icon">✅</div>
+        </div>
+      </div>
+
+      <div class="card kpi">
+        <div class="kpi-top">
+          <div>
+            <div class="muted kpi-label">Incomplets / Litiges</div>
+            <div class="kpi-value" id="kpiIssues">—</div>
+            <div class="muted kpi-sub" id="kpiIssuesCount">—</div>
+          </div>
+          <div class="kpi-icon">⚠️</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="card guide-strip section-gap">
+    <div>
+      <div class="eyebrow">Utilisation simple</div>
+      <strong>Pour commencer :</strong> cliquez sur <b>Ajouter une facture</b>, déposez un document, puis vérifiez uniquement les champs marqués <span class="badge warn">À compléter</span>.
+    </div>
+    <div class="guide-mini-steps">
+      <span>1. Déposer</span><span>2. Vérifier</span><span>3. Payer</span>
+    </div>
+  </div>
+  <!-- Import unique (1 ou plusieurs fichiers) -->
+  <div class="card section-gap">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+      <h3 style="margin:0;">Ajouter une facture</h3>
+      <div class="muted">Déposez un PDF ou une photo. L'application essaie de remplir les champs automatiquement.</div>
+    </div>
+
+    <form action="/factures/scan" method="post" enctype="multipart/form-data" class="import-grid" id="scanForm">
+      <div class="upload-helper">
+        <div class="helper-title">Ce que fait l'application</div>
+        <ul>
+          <li>Classe le document en FACTURE / BC / BR</li>
+          <li>Détecte fournisseur, date, montant et échéance</li>
+          <li>Signale ce qu'il reste à compléter</li>
+        </ul>
+      </div>
+      <div class="upload-left">
+        <label for="files">Fichiers</label>
+
+<div class="dropzone" id="dropzone">
+  <div class="drop-ico">📎</div>
+  <div class="drop-text">
+    <div class="drop-title">Dépose tes fichiers ici</div>
+    <div class="drop-sub">ou clique pour sélectionner (photo/PDF) — plusieurs fichiers possible</div>
+    <div class="drop-files" id="filesLabel">Aucun fichier sélectionné</div>
+  </div>
+
+  <!-- input file invisible mais cliquable via la zone -->
+  <input
+    id="files"
+    name="files"
+    type="file"
+    accept="image/*,application/pdf"
+    capture="environment"
+    multiple
+    required
+    class="file-input-real"
+  />
+</div>
+
+<p class="help-text">
+  1 fichier = facture. Plusieurs fichiers = dossier (l’IA classe FACTURE/BC/BR).
+</p>
+
+      </div>
+
+      <div class="upload-right">
+        <button type="submit" class="btn-primary" id="scanBtn">
+          <span class="btn-text">Analyser et préremplir</span>
+          <span class="btn-spinner" aria-hidden="true"></span>
+        </button>
+        
+        <div class="muted" id="scanMsg">Après l'analyse, vérifiez seulement les champs manquants.</div>
+      </div>
+    </form>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="card section-gap">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <div class="field">
+          <label for="q">Recherche</label>
+          <input id="q" class="input" type="search" placeholder="Fournisseur, N° facture, projet, cashflow…">
+        </div>
+
+        <div class="field">
+          <label for="statusFilter">Statut</label>
+          <select id="statusFilter" class="input">
+            <option value="">Tous</option>
+            <option value="A_PAYER">A_PAYER</option>
+            <option value="PAYEE">PAYEE</option>
+            <option value="ANNULEE">ANNULEE</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="curFilter">Devise</label>
+          <select id="curFilter" class="input">
+            <option value="">Toutes</option>
+            <option value="MAD">MAD</option>
+            <option value="EUR">EUR</option>
+            <option value="USD">USD</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="qualityFilter">Qualité</label>
+          <select id="qualityFilter" class="input">
+            <option value="">Toutes</option>
+            <option value="OK">OK</option>
+            <option value="INCOMPLETE">Incomplet</option>
+            <option value="DISPUTED">Litige</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="dateFrom">Date min</label>
+          <input id="dateFrom" class="input" type="date">
+        </div>
+
+        <div class="field">
+          <label for="dateTo">Date max</label>
+          <input id="dateTo" class="input" type="date">
+        </div>
+      </div>
+
+      <div class="toolbar-right">
+        <div class="muted" id="rowCount">—</div>
+        <button class="btn-secondary" type="button" id="resetFilters">Réinitialiser</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="card table-card">
+    <div class="table-wrap">
+      <table id="invoicesTable">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Fournisseur</th>
+            <th>N° Facture</th>
+            <th class="num">Montant TTC</th>
+            <th>Devise</th>
+
+            <th>Service</th>
+            <th>Délai appl.</th>
+            <th>Date limite</th>
+            <th>Échéance</th>
+
+            <th>Statut</th>
+            <th>Paiement</th>
+            <th>Mode</th>
+
+            <th>Qualité</th>
+            <th style="text-align:center;">Actions</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {% for f in invs %}
+
+          {# Qualité: incomplet si champs clés manquants #}
+          {% set missing = [] %}
+          {% if not f.service_date %}{% set _ = missing.append('service_date') %}{% endif %}
+          {% if not f.payment_terms_days and not f.derogation_sector %}{% set _ = missing.append('delai') %}{% endif %}
+          {% if not f.cashflow_category %}{% set _ = missing.append('cashflow') %}{% endif %}
+          {% set is_incomplete = (missing|length > 0) %}
+          {% set is_disputed = (f.is_disputed == True) %}
+
+          {# --- Calcul échéance --- #}
+          {% set today = today if today is defined else None %}
+          {% set due = (f.legal_due_date.date() if f.legal_due_date else None) %}
+          {% set is_paid = ((f.status or '')|upper == 'PAYEE') %}
+          {% set is_cancel = ((f.status or '')|upper == 'ANNULEE') %}
+          {% set overdue = (today and due and due < today and (not is_paid) and (not is_cancel)) %}
+          {% set days_left = ((due - today).days if (today and due) else None) %}
+          {% set soon = (days_left is not none and days_left >= 0 and days_left <= 7 and (not is_paid) and (not is_cancel)) %}
+
+
+          <tr
+            class="{% if overdue %}row-overdue{% elif soon %}row-soon{% endif %}"
+            data-status="{{ (f.status or '')|upper }}"
+            data-cur="{{ (f.currency or '')|upper }}"
+            data-date="{{ f.invoice_date.date().isoformat() if f.invoice_date else '' }}"
+            data-amount="{{ (f.amount_ttc if f.amount_ttc is not none else (f.amount or 0)) }}"
+            data-incomplete="{{ '1' if is_incomplete else '0' }}"
+            data-disputed="{{ '1' if is_disputed else '0' }}"
+            data-search="{{ (f.invoice_no or '') ~ ' ' ~ (f.supplier_name or '') ~ ' ' ~ (f.status or '') ~ ' ' ~ (f.currency or '') ~ ' ' ~ (f.cashflow_category or '') ~ ' ' ~ (f.project or '') ~ ' ' ~ (f.site or '') }}"
+          >
+
+            <td>{{ f.invoice_date.date().isoformat() if f.invoice_date else "" }}</td>
+            <td class="left">{{ f.supplier_name or "" }}</td>
+            <td>{{ f.invoice_no or "" }}</td>
+
+            <td class="num">
+              {% if (not f.invoice_no) and (f.amount_ttc is none) and ((f.amount or 0) == 0) %}
+                {{ "" }}
+              {% else %}
+                {{ "%.2f"|format((f.amount_ttc if f.amount_ttc is not none else (f.amount or 0))) }}
+              {% endif %}
+            </td>
+            <td>{{ f.currency or "" }}</td>
+
+            <td>{{ f.service_date.date().isoformat() if f.service_date else "" }}</td>
+            <td>{{ f.applied_terms_days if f.applied_terms_days is not none else "" }}</td>
+            <td>{{ f.legal_due_date.date().isoformat() if f.legal_due_date else "" }}</td>
+
+            <td>
+  {% if not due %}
+    <span class="badge neutral" title="Date limite non calculée">—</span>
+  {% elif overdue %}
+    <span class="badge danger" title="Échéance dépassée">⛔ RETARD (J+{{ (today - due).days }})</span>
+  {% elif soon %}
+    <span class="badge info" title="Échéance proche">⏳ À J-{{ days_left }}</span>
+  {% else %}
+    <span class="badge ok" title="OK">✅ OK</span>
+  {% endif %}
+</td>
+
+
+
+            <td>
+              {% set st = (f.status or '')|upper %}
+              {% if st == 'A_PAYER' %}
+                <span class="badge warn">💳 A_PAYER</span>
+              {% elif st == 'PAYEE' %}
+                <span class="badge ok">✅ PAYEE</span>
+              {% elif st == 'BC_RECU' %}
+                <span class="badge info">📄 BC reçu</span>
+              {% elif st == 'BR_RECU' %}
+                <span class="badge info">📦 BR reçu</span>
+              {% elif st == 'INCOMPLET' %}
+                <span class="badge warn">⚠️ INCOMPLET</span>
+              {% elif st == 'ANNULEE' %}
+                <span class="badge" style="background:rgba(17,24,39,0.06); border-color:rgba(17,24,39,0.15); color:var(--muted);">🧾 ANNULEE</span>
+              {% else %}
+                <span class="badge" style="background:rgba(17,24,39,0.06); border-color:rgba(17,24,39,0.15); color:var(--muted);">—</span>
+              {% endif %}
+            </td>
+
+            <td>{{ f.payment_date.date().isoformat() if f.payment_date else "" }}</td>
+            <td>{{ f.payment_mode or "" }}</td>
+
+            <td>
+              {% if is_disputed %}
+                <span class="badge warn" title="Facture en litige">⚠️ Litige</span>
+              {% elif is_incomplete %}
+                <span class="badge warn" title="Champs manquants: {{ missing|join(', ') }}">⚠️ Incomplet</span>
+              {% else %}
+                <span class="badge ok" title="OK">✅ OK</span>
+              {% endif %}
+            </td>
+
+            <td>
+              <div class="actions">
+                <a class="icon-btn"
+                   href="/factures/{{ f.id }}/open"
+                   target="_blank" rel="noopener"
+                   title="Voir le document">👁️</a>
+
+                <a class="icon-btn"
+                   href="/factures/{{ f.id }}"
+                   title="Modifier (détails)">✏️</a>
+
+                <a class="icon-btn"
+                   href="/factures/{{ f.id }}/download_pdf"
+                   target="_blank" rel="noopener"
+                   title="Dossier PDF (Facture+BC+BR)">🧾</a>
+
+                <form method="post" action="/factures/{{ f.id }}/delete" style="display:inline" class="js-delete-invoice" data-invoice-id="{{ f.id }}">
+                  <button class="icon-btn icon-btn-danger" type="submit" title="Supprimer">🗑️</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+
+      </table>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}

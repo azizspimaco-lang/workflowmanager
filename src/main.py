@@ -2837,6 +2837,14 @@ def releve_to_facture(
     return RedirectResponse("/releves?view=unmatched&msg=to_facture", status_code=303)
 
 
+def _releves_back_url(request: Request, default_view: str = "unmatched") -> str:
+    ref = (request.headers.get("referer") or "").strip()
+    if "/releves" in ref:
+        sep = "&" if "?" in ref else "?"
+        return f"{ref}{sep}"
+    return f"/releves?view={default_view}&"
+
+
 @app.post("/releves/{txn_id}/to_hors_facture")
 def releve_to_hors_facture(
     txn_id: int,
@@ -2855,7 +2863,36 @@ def releve_to_hors_facture(
     txn.processing_status = "HORS_FACTURE"
     session.add(txn)
     session.commit()
-    return RedirectResponse("/releves?view=classified&msg=to_hors_facture", status_code=303)
+    return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=to_hors_facture", status_code=303)
+
+
+@app.post("/releves/to_hors_facture_selected")
+async def releves_to_hors_facture_selected(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    _ = get_current_user(request, session)
+    form = await request.form()
+    raw_ids = form.getlist("txn_ids") if hasattr(form, "getlist") else []
+    ids = [int(str(x)) for x in raw_ids if str(x).isdigit()]
+    if not ids:
+        return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=no_selection", status_code=303)
+
+    moved = 0
+    blocked = 0
+    for txn_id in ids:
+        txn = session.get(BankTxn, txn_id)
+        if not txn:
+            continue
+        has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+        if has_match:
+            blocked += 1
+            continue
+        txn.processing_status = "HORS_FACTURE"
+        session.add(txn)
+        moved += 1
+    session.commit()
+    return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=to_hors_facture_bulk&n={moved}&blocked={blocked}", status_code=303)
 
 
 @app.post("/matching/manual")
@@ -2881,8 +2918,12 @@ def matching_manual(
     if not txn or not inv:
         return _back("bad_ids")
 
-    if (txn.processing_status or "").strip().upper() not in ("FACTURE", "RAPPROCHEE"):
+    txn_status = (txn.processing_status or "IMPORTED").strip().upper()
+    if txn_status in ("HORS_FACTURE", "QUALIFIEE"):
         return _back("txn_not_classed_facture")
+    if txn_status in ("IMPORTED", "A_CLASSER", ""):
+        txn.processing_status = "FACTURE"
+        session.add(txn)
 
     inv_amt = _invoice_open_amount(session, inv)
     txn_amt = _txn_amount(txn)

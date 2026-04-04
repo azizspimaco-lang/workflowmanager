@@ -29,6 +29,7 @@
     "bad_txn": "Mouvement introuvable.",
     "releves_load_error": "Certaines données n'ont pas pu être chargées correctement.",
     "to_hors_facture": "Le mouvement a été classé hors facture.",
+    "to_hors_facture_bulk": "Les mouvements sélectionnés ont été classés hors facture.",
     "to_facture": "Le mouvement a été affecté aux factures / règlements."
   } %}
   {% if msg %}
@@ -112,10 +113,18 @@
   <div class="card section-gap" style="margin-top:12px; overflow:auto;">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px;">
       <div class="muted">Les suppressions restent disponibles ici pour le nettoyage des imports.</div>
-      <form id="bulkDeleteForm" method="post" action="/releves/delete-selected" onsubmit="return confirm('Supprimer les mouvements sélectionnés ? Les mouvements déjà rapprochés ne seront pas supprimés.');" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        <button class="btn-secondary" type="button" id="toggleDeleteCandidates">Sélectionner commissions / frais / TVA</button>
-        <button class="btn" type="submit">🗑️ Supprimer la sélection</button>
-      </form>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        {% if view == 'unmatched' %}
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button class="btn-secondary" type="button" id="selectAllClassify">Tout sélectionner</button>
+          <button class="btn" type="button" id="bulkClassifySubmit">Classer hors facture la sélection</button>
+        </div>
+        {% endif %}
+        <form id="bulkDeleteForm" method="post" action="/releves/delete-selected" onsubmit="return confirm('Supprimer les mouvements sélectionnés ? Les mouvements déjà rapprochés ne seront pas supprimés.');" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button class="btn-secondary" type="button" id="toggleDeleteCandidates">Sélectionner commissions / frais / TVA</button>
+          <button class="btn" type="submit">🗑️ Supprimer la sélection</button>
+        </form>
+      </div>
     </div>
 
     <table class="table">
@@ -140,7 +149,7 @@
         <tr>
           <td>
             {% if not is_matched %}
-              <input type="checkbox" class="delete-box" form="bulkDeleteForm" name="txn_ids" value="{{ txn_id }}" data-label="{{ (t.label or '')|lower }}" />
+              <input type="checkbox" class="delete-box classify-box" form="bulkDeleteForm" name="txn_ids" value="{{ txn_id }}" data-label="{{ (t.label or '')|lower }}" />
             {% endif %}
           </td>
           <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
@@ -221,6 +230,38 @@
   if (checkAll) {
     checkAll.addEventListener('change', function(){
       document.querySelectorAll('.delete-box').forEach(cb => { cb.checked = !!checkAll.checked; });
+    });
+  }
+
+  const selectAllClassify = document.getElementById('selectAllClassify');
+  if (selectAllClassify) {
+    selectAllClassify.addEventListener('click', function(){
+      document.querySelectorAll('.classify-box').forEach(cb => { cb.checked = true; });
+      if (checkAll) checkAll.checked = true;
+    });
+  }
+
+  const bulkClassifySubmit = document.getElementById('bulkClassifySubmit');
+  if (bulkClassifySubmit) {
+    bulkClassifySubmit.addEventListener('click', function(){
+      const selected = Array.from(document.querySelectorAll('.classify-box:checked')).map(cb => cb.value);
+      if (!selected.length) {
+        alert('Sélectionne au moins une ligne.');
+        return;
+      }
+      if (!confirm('Classer hors facture les mouvements sélectionnés ?')) return;
+      const form = document.createElement('form');
+      form.method = 'post';
+      form.action = '/releves/to_hors_facture_selected';
+      selected.forEach(function(id){
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'txn_ids';
+        input.value = id;
+        form.appendChild(input);
+      });
+      document.body.appendChild(form);
+      form.submit();
     });
   }
 

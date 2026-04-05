@@ -10,7 +10,11 @@ import zipfile
 import unicodedata
 import csv
 import re
+import math
+import pathlib
 import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 from datetime import datetime, timedelta, date
 from typing import Optional
 from io import BytesIO
@@ -4320,8 +4324,14 @@ def delais_page(request: Request, session: Session = Depends(get_session)):
 
 @app.get("/delais/export.xlsx")
 def delais_export_xlsx(request: Request, session: Session = Depends(get_session)):
-    """Export simple (Excel) des délais de paiement — fournisseurs marocains uniquement."""
+    """Export CONFORME Note Circulaire N°734 / Loi 69-21 — fournisseurs marocains uniquement.
+    Contient l'état annexe complet avec calcul de l'amende pécuniaire.
+    """
     _ = get_current_user(request, session)
+
+    # Taux directeur BAM configurable (env BAM_TAUX_DIRECTEUR=2.75 par défaut)
+    BAM_TAUX = float(os.environ.get("BAM_TAUX_DIRECTEUR", "2.75")) / 100.0
+    TAUX_MENSUEL_SUPP = 0.0085  # 0.85% par mois supplémentaire (art. 78-3)
 
     invs = session.exec(
         select(Invoice)
@@ -4330,64 +4340,327 @@ def delais_export_xlsx(request: Request, session: Session = Depends(get_session)
         .order_by(Invoice.invoice_date.asc().nullslast(), Invoice.id.asc())
     ).all()
 
+    # Map invoice_id -> dernier batch de paiement (pour mode / référence)
+    payment_batch_by_invoice: dict[int, PaymentBatch] = {}
+    if invs:
+        inv_ids = [int(inv.id) for inv in invs if inv.id]
+        plines = session.exec(select(PaymentLine).where(PaymentLine.invoice_id.in_(inv_ids))).all()
+        batch_ids = sorted({int(ln.batch_id) for ln in plines if ln.batch_id})
+        batch_map = {int(b.id): b for b in session.exec(select(PaymentBatch).where(PaymentBatch.id.in_(batch_ids))).all()} if batch_ids else {}
+        for ln in plines:
+            if not ln.invoice_id:
+                continue
+            batch = batch_map.get(int(ln.batch_id))
+            if not batch:
+                continue
+            current = payment_batch_by_invoice.get(int(ln.invoice_id))
+            if current is None or int(batch.id or 0) > int(current.id or 0):
+                payment_batch_by_invoice[int(ln.invoice_id)] = batch
+
+    today = datetime.utcnow().date()
+
+    # ---- Workbook ----
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "DelaisPaiement"
+    ws.title = "Etat Annexe"
 
-    headers = [
-        "ID",
+    BLUE_DARK = "1F3864"
+    BLUE_MED  = "2E75B6"
+    RED_LIGHT = "FFE0E0"
+    YELLOW    = "FFF2CC"
+    WHITE     = "FFFFFF"
+
+    H_FILL  = PatternFill("solid", fgColor=BLUE_DARK)
+    H_FONT  = Font(bold=True, color=WHITE, size=9)
+    T_FONT  = Font(size=9)
+    C_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    L_ALIGN = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    R_ALIGN = Alignment(horizontal="right",  vertical="center")
+    LATE_F  = PatternFill("solid", fgColor=RED_LIGHT)
+    WARN_F  = PatternFill("solid", fgColor=YELLOW)
+    AMT_FMT = '#,##0.00'
+
+    # Titre
+    ws.merge_cells("A1:S1")
+    ws["A1"] = "ÉTAT ANNEXE — DÉCLARATION DES DÉLAIS DE PAIEMENT"
+    ws["A1"].font = Font(bold=True, size=13, color=BLUE_DARK)
+    ws["A1"].alignment = C_ALIGN
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells("A2:S2")
+    ws["A2"] = (
+        f"Note Circulaire N°734 — Loi 69-21 — Extrait au {today.strftime('%d/%m/%Y')}"
+        f"   |   Taux directeur BAM : {BAM_TAUX*100:.2f}%  +  0,85% / mois supplémentaire"
+        f"   |   Fournisseurs marocains uniquement"
+    )
+    ws["A2"].font = Font(size=8, italic=True, color="595959")
+    ws["A2"].alignment = C_ALIGN
+    ws.row_dimensions[2].height = 16
+
+    # En-têtes état annexe (19 colonnes conformes à la circulaire)
+    COL_HEADERS = [
+        "Réf. Facture",
+        "Date\nÉmission",
+        "Date Livraison\n/ Service fait",
+        "Fournisseur\n(Raison sociale)",
+        "Adresse\nSiège social",
+        "N° RC",
         "IF",
-        "ICE",
-        "Fournisseur",
-        "N° facture",
-        "Date facture",
-        "Nature",
-        "Date début calcul",
-        "Échéance légale",
-        "Date paiement",
-        "Montant",
-        "Devise",
-        "BC",
-        "BR",
+        "ICE\n(Identifiant commun)",
+        "Nature\nOpération",
+        "Montant TTC\n(MAD)",
+        "Date prévue\n/ Convenue",
+        "Montant\nnon payé",
+        "Montant payé\nhors délai",
+        "Date paiement\nhors délai",
+        "Mode & Réf.\nPaiement",
+        "Délai légal\n(jours)",
+        "Mois de\nretard",
+        "Amende pécuniaire\nestimée (MAD)",
         "Statut",
     ]
-    ws.append(headers)
+
+    HDR_ROW = 4
+    for ci, h in enumerate(COL_HEADERS, 1):
+        c = ws.cell(row=HDR_ROW, column=ci, value=h)
+        c.fill = H_FILL
+        c.font = H_FONT
+        c.alignment = C_ALIGN
+    ws.row_dimensions[HDR_ROW].height = 38
+    ws.freeze_panes = f"A{HDR_ROW + 1}"
+
+    # ---- Données ----
+    data_row = HDR_ROW + 1
+    kpi_total = kpi_late_amt = kpi_amende_total = 0.0
+    kpi_late_cnt = 0
+
+    AMT_COLS  = {10, 12, 13, 18}    # colonnes montant → alignement droit + format nombre
+    DATE_COLS = {2, 3, 11, 14}      # colonnes date
 
     for inv in invs:
-        amt = inv.amount_ttc if inv.amount_ttc is not None else inv.amount
-        ws.append(
-            [
-                inv.id,
-                inv.supplier_if or "",
-                inv.supplier_ice or "",
-                inv.supplier_name or "",
-                inv.invoice_no or "",
-                inv.invoice_date.date().isoformat() if inv.invoice_date else "",
-                (inv.nature_operation or ""),
-                inv.calc_start_date.date().isoformat() if inv.calc_start_date else "",
-                inv.legal_due_date.date().isoformat() if inv.legal_due_date else "",
-                inv.payment_date.date().isoformat() if inv.payment_date else "",
-                float(amt or 0.0),
-                (inv.currency or "MAD").upper(),
-                inv.bc_no or "",
-                inv.br_no or "",
-                (inv.status or ""),
-            ]
-        )
+        amt     = float((inv.amount_ttc if inv.amount_ttc is not None else inv.amount) or 0.0)
+        amt_paid = float(inv.amount_paid or 0.0)
+        amt_unpaid = round(max(0.0, amt - amt_paid), 2)
 
-    # format simple
-    for col in range(1, len(headers) + 1):
-        ws.cell(row=1, column=col).font = openpyxl.styles.Font(bold=True)
-        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 18
-    ws.freeze_panes = "A2"
+        legal_due = inv.legal_due_date.date() if inv.legal_due_date else None
+        pay_date  = inv.payment_date.date()   if inv.payment_date  else None
+        delai_j   = inv.applied_terms_days or (60 if not inv.due_date_agreed else 120)
+
+        # --- Calcul retard et amende ---
+        is_late = False
+        amt_paid_late = 0.0
+        date_paid_late = None
+        mois_retard = 0
+        amende = 0.0
+
+        if legal_due:
+            ref_date = pay_date if pay_date else today
+            if ref_date > legal_due:
+                is_late = True
+                days_late = (ref_date - legal_due).days
+                mois_retard = math.ceil(days_late / 30)  # tout mois entamé compté
+
+                if pay_date and pay_date > legal_due:
+                    amt_paid_late = round(amt_paid, 2)
+                    date_paid_late = pay_date
+
+                # Base amende = montant non payé dans les délais
+                base_amende = amt_unpaid if amt_unpaid > 0 else (amt_paid_late if amt_paid_late > 0 else 0.0)
+                if base_amende > 0 and mois_retard >= 1:
+                    if mois_retard == 1:
+                        raw_amende = base_amende * BAM_TAUX
+                    else:
+                        raw_amende = base_amende * (BAM_TAUX + TAUX_MENSUEL_SUPP * (mois_retard - 1))
+                    # Arrondi au dirham supérieur
+                    amende = math.ceil(raw_amende)
+
+        # Mode / référence de paiement
+        batch = payment_batch_by_invoice.get(int(inv.id or 0))
+        mode_paiement = ""
+        if batch:
+            ref_str = (batch.instrument_ref or "").strip()
+            mode_paiement = f"{_payment_type_label(batch.payment_type)}{(' — ' + ref_str) if ref_str else ''}"
+        elif inv.payment_mode:
+            mode_paiement = str(inv.payment_mode)
+
+        # Date livraison / service fait
+        date_livraison = (
+            inv.service_date or inv.br_date or inv.reception_date or inv.invoice_date
+        )
+        date_livraison_val = date_livraison.date().isoformat() if date_livraison else ""
+
+        row_vals = [
+            inv.invoice_no or "",
+            inv.invoice_date.date().isoformat() if inv.invoice_date else "",
+            date_livraison_val,
+            inv.supplier_name or "",
+            inv.supplier_address or "",
+            inv.supplier_rc or "",
+            inv.supplier_if or "",
+            inv.supplier_ice or "",
+            inv.nature_operation or "",
+            round(amt, 2),
+            legal_due.isoformat() if legal_due else "",
+            round(amt_unpaid, 2),
+            round(amt_paid_late, 2) if (is_late and amt_paid_late > 0) else 0.0,
+            date_paid_late.isoformat() if date_paid_late else "",
+            mode_paiement,
+            delai_j,
+            mois_retard if is_late else 0,
+            round(amende, 2) if amende > 0 else 0.0,
+            (inv.status or ""),
+        ]
+
+        for ci, val in enumerate(row_vals, 1):
+            c = ws.cell(row=data_row, column=ci, value=val)
+            c.font = T_FONT
+            if ci in AMT_COLS:
+                c.alignment = R_ALIGN
+                c.number_format = AMT_FMT
+            else:
+                c.alignment = L_ALIGN
+
+        row_fill = LATE_F if is_late else None
+        if row_fill:
+            for ci in range(1, len(COL_HEADERS) + 1):
+                ws.cell(row=data_row, column=ci).fill = row_fill
+
+        if is_late:
+            kpi_late_cnt += 1
+            kpi_late_amt += amt_unpaid
+            kpi_amende_total += amende
+
+        kpi_total += amt
+        data_row += 1
+
+    # Ligne totaux
+    TOTAL_ROW = data_row + 1
+    bold9 = Font(bold=True, size=9)
+    bold9r = Font(bold=True, size=9, color="C00000")
+    ws.cell(row=TOTAL_ROW, column=1, value="TOTAUX").font = bold9
+    for ci, val, fnt in [
+        (10, round(kpi_total, 2),         bold9),
+        (12, round(kpi_late_amt, 2),      bold9),
+        (18, round(kpi_amende_total, 2),  bold9r),
+    ]:
+        c = ws.cell(row=TOTAL_ROW, column=ci, value=val)
+        c.font = fnt
+        c.number_format = AMT_FMT
+        c.alignment = R_ALIGN
+
+    # Largeurs colonnes
+    col_widths = [16, 13, 16, 36, 30, 12, 13, 22, 14, 16, 15, 16, 16, 16, 22, 12, 13, 20, 12]
+    for ci, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    # ---- Feuille Résumé Déclaration ----
+    ws2 = wb.create_sheet("Résumé Déclaration")
+    ws2.merge_cells("A1:C1")
+    ws2["A1"] = "RÉSUMÉ — DÉCLARATION DÉLAIS DE PAIEMENT (LOI 69-21 / CIRCULAIRE N°734)"
+    ws2["A1"].font = Font(bold=True, size=12, color=BLUE_DARK)
+    ws2["A1"].alignment = C_ALIGN
+    ws2.row_dimensions[1].height = 25
+
+    summary = [
+        ("Date d'extraction", today.strftime("%d/%m/%Y"), ""),
+        ("Référence légale", "Note Circulaire N°734 — Loi 69-21", ""),
+        ("Taux directeur BAM appliqué", f"{BAM_TAUX * 100:.2f}%", "Modifier via env BAM_TAUX_DIRECTEUR"),
+        ("Taux mensuel supplémentaire", "0,85% / mois", "Art. 78-3 — tout mois entamé compté entier"),
+        ("", "", ""),
+        ("INDICATEURS", "", ""),
+        ("Nombre total de factures analysées", len(invs), "Fournisseurs marocains uniquement"),
+        ("Montant total factures TTC (MAD)", round(kpi_total, 2), ""),
+        ("Nombre de factures en retard", kpi_late_cnt, ""),
+        ("Montant non payé / payé hors délai (MAD)", round(kpi_late_amt, 2), ""),
+        ("Amende pécuniaire totale estimée (MAD)", round(kpi_amende_total, 2), "À arrondir au dirham supérieur"),
+        ("", "", ""),
+        ("RAPPELS RÉGLEMENTAIRES", "", ""),
+        ("Délai légal par défaut", "60 jours", "Art. 78-2 — si délai non convenu"),
+        ("Délai max si convenu", "120 jours", "Art. 78-2 — délai maximum"),
+        ("Délai sectoriel dérogatoire", "180 jours", "Par décret — secteurs spécifiques"),
+        ("Déclaration trimestrielle", "Avant fin du mois suivant chaque trimestre", "CA > 2 000 000 MAD HT"),
+        ("Déclaration annuelle 2024 & 2025", "Avant le 1er avril 2026", "CA ≤ 50 000 000 MAD HT"),
+        ("Fournisseurs étrangers", "EXCLUS de la déclaration", "Conformément à la loi"),
+        ("Factures en LITIGE", "Amende suspendue", "Art. 78-3 — jusqu'au jugement définitif"),
+        ("Factures ≤ 10 000 MAD (avant jan. 2025)", "Exclues provisoirement", "Art. 2 Loi 69-21"),
+    ]
+
+    ws2["A3"].font = Font(bold=True, size=9, color=WHITE)
+    ws2["B3"].font = Font(bold=True, size=9, color=WHITE)
+    ws2["C3"].font = Font(bold=True, size=9, color=WHITE)
+    for ci, label in enumerate(["Paramètre / Indicateur", "Valeur", "Note"], 1):
+        c = ws2.cell(row=3, column=ci, value=label)
+        c.fill = H_FILL
+        c.font = Font(bold=True, size=9, color=WHITE)
+        c.alignment = C_ALIGN
+
+    for ri, (label, val, note) in enumerate(summary, 4):
+        is_section = label in ("INDICATEURS", "RAPPELS RÉGLEMENTAIRES")
+        c1 = ws2.cell(row=ri, column=1, value=label)
+        c2 = ws2.cell(row=ri, column=2, value=val)
+        c3 = ws2.cell(row=ri, column=3, value=note)
+        fnt = Font(bold=True, size=9, color=BLUE_MED) if is_section else Font(size=9)
+        c1.font = fnt
+        c2.font = Font(bold=True, size=9) if label == "Amende pécuniaire totale estimée (MAD)" else fnt
+        c3.font = Font(size=8, italic=True, color="595959")
+        if label == "Amende pécuniaire totale estimée (MAD)":
+            c2.number_format = AMT_FMT
+            c2.font = Font(bold=True, size=9, color="C00000")
+        elif isinstance(val, float):
+            c2.number_format = AMT_FMT
+
+    ws2.column_dimensions["A"].width = 48
+    ws2.column_dimensions["B"].width = 30
+    ws2.column_dimensions["C"].width = 48
+
+    # ---- Feuille Légende ----
+    ws3 = wb.create_sheet("Légende")
+    ws3["A1"] = "LÉGENDE — COLONNES DE L'ÉTAT ANNEXE"
+    ws3["A1"].font = Font(bold=True, size=11, color=BLUE_DARK)
+    legende = [
+        ("Col.", "Libellé", "Description"),
+        ("1", "Réf. Facture", "Numéro de la facture émise par le fournisseur"),
+        ("2", "Date Émission", "Date d'émission de la facture"),
+        ("3", "Date Livraison / Service fait", "Date de livraison des marchandises, d'exécution des travaux ou de prestation de services"),
+        ("4", "Fournisseur", "Raison sociale ou nom du fournisseur"),
+        ("5", "Adresse Siège social", "Adresse du siège social du fournisseur"),
+        ("6", "N° RC", "Numéro d'immatriculation au Registre de Commerce"),
+        ("7", "IF", "Numéro d'Identifiant Fiscal du fournisseur"),
+        ("8", "ICE", "Identifiant Commun de l'Entreprise (ICE) du fournisseur"),
+        ("9", "Nature Opération", "Nature des marchandises livrées, des travaux exécutés ou des services rendus"),
+        ("10", "Montant TTC", "Montant toutes taxes comprises de la facture en MAD"),
+        ("11", "Date prévue / Convenue", "Date légale d'échéance calculée selon l'art. 78-2"),
+        ("12", "Montant non payé", "Montant de la facture non payé totalement ou partiellement"),
+        ("13", "Montant payé hors délai", "Montant de la facture payé, totalement ou partiellement, hors délai"),
+        ("14", "Date paiement hors délai", "Date du paiement effectué totalement ou partiellement hors délai"),
+        ("15", "Mode & Réf. Paiement", "Mode (virement/chèque/effet) et référence du paiement de la facture"),
+        ("16", "Délai légal (jours)", "Délai légal de paiement applicable (60, 120 ou 180 jours selon secteur)"),
+        ("17", "Mois de retard", "Nombre de mois de retard — tout mois entamé est compté entier"),
+        ("18", "Amende pécuniaire", "Taux directeur BAM (1er mois) + 0,85% × mois supplémentaires, sur montant non payé"),
+        ("19", "Statut", "Statut de la facture dans l'application (A_PAYER / PARTIEL / PAYEE / LITIGE)"),
+    ]
+    for ri, (c1, c2, c3) in enumerate(legende, 3):
+        is_hdr = ri == 3
+        for ci, val in enumerate([c1, c2, c3], 1):
+            c = ws3.cell(row=ri, column=ci, value=val)
+            if is_hdr:
+                c.fill = H_FILL
+                c.font = Font(bold=True, size=9, color=WHITE)
+            else:
+                c.font = Font(size=9)
+            c.alignment = L_ALIGN
+    ws3.column_dimensions["A"].width = 6
+    ws3.column_dimensions["B"].width = 32
+    ws3.column_dimensions["C"].width = 80
 
     out = BytesIO()
     wb.save(out)
     out.seek(0)
+    period = today.strftime("%Y%m%d")
     return Response(
         content=out.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=delais_paiement.xlsx"},
+        headers={"Content-Disposition": f"attachment; filename=declaration_delais_{period}.xlsx"},
     )
 
 
@@ -7038,4 +7311,866 @@ def debug_routes():
         methods = ",".join(sorted(getattr(r, "methods", []) or []))
         lines.append(f"{methods:20s} {path:35s}  {name}")
     return "\n".join(lines)
+
+
+# ============================================================
+# RAPPORT CASHFLOW SPIMACO — FORECAST vs REEL par mois
+# ============================================================
+
+# Mapping rubriques app → lignes du rapport SPIMACO
+# Clé = cashflow_rubrique ou cashflow_category stocké en base
+# Valeur = ligne du rapport (section, label)
+SPIMACO_RUBRIQUE_MAP: dict[str, tuple[str, str]] = {
+    # ---- INFLOWS ----
+    "ENCAISSEMENT_PRIVE":        ("inflows",   "Private"),
+    "ENCAISSEMENT_GOUVERNEMENT": ("inflows",   "Government"),
+    "ENCAISSEMENT_INTERNATIONAL":("inflows",   "International"),
+    "ENCAISSEMENT_LICENSORS":    ("inflows",   "Licensors"),
+    "PRIVATE":                   ("inflows",   "Private"),
+    "GOVERNMENT":                ("inflows",   "Government"),
+    "INTERNATIONAL":             ("inflows",   "International"),
+    "LICENSORS":                 ("inflows",   "Licensors"),
+    # ---- OUTFLOWS ----
+    "SALAIRES":                  ("outflows",  "Salaries and other Staff Cost"),
+    "SALARIES":                  ("outflows",  "Salaries and other Staff Cost"),
+    "FOURNISSEURS":              ("outflows",  "Suppliers Payments"),
+    "SUPPLIERS":                 ("outflows",  "Suppliers Payments"),
+    "DEPOT_GARANTIE":            ("outflows",  "Security Deposit"),
+    "GOSI_UTILITIES":            ("outflows",  "GOSI, Utility Bills & Others"),
+    "UTILITIES":                 ("outflows",  "GOSI, Utility Bills & Others"),
+    "TVA":                       ("outflows",  "VAT & Insurance"),
+    "VAT":                       ("outflows",  "VAT & Insurance"),
+    "REMUNERATION_CA":           ("outflows",  "Board of Directors' Remuneration"),
+    "CHARGES_FINANCIERES":       ("outflows",  "Financial Exp / Income"),
+    "FINANCIAL":                 ("outflows",  "Financial Exp / Income"),
+    "PETTY_CASH":                ("outflows",  "Petty Cash Reimbursement"),
+    # ---- INVESTISSEMENTS ----
+    "CAPEX":                     ("invest",    "CAPEX"),
+    "CAPEX_BERRECHID":           ("invest",    "CAPEX - Berrechid Site"),
+    "CAPEX_TANGER":              ("invest",    "CAPEX - Tangier Site"),
+    "CAPEX_AUTRES":              ("invest",    "CAPEX - Others"),
+    "DIVIDENDES":                ("invest",    "Dividend Payment"),
+    "AUTRES_ENCAISSEMENTS":      ("invest",    "Other Collection"),
+    # ---- FINANCEMENT ----
+    "DEPOT_ISLAMIQUE_ENTREE":    ("financing", "Islamic Deposit Inflows"),
+    "DEPOT_ISLAMIQUE_SORTIE":    ("financing", "Islamic Deposit Outflows"),
+    "PRET_CT_TIRE":              ("financing", "Short Term Loan Drawdown"),
+    "PRET_LT_TIRE":              ("financing", "Long Term Loan Drawdown"),
+    "REMBOURSEMENT_CT":          ("financing", "Short Term Loan Repayment"),
+    "REMBOURSEMENT_LT":          ("financing", "Long Term Loan Repayment"),
+}
+
+# Structure ordonnée du rapport
+SPIMACO_SECTIONS: list[tuple[str, str, list[str]]] = [
+    # (section_id, label_section, [lignes])
+    ("inflows", "Cash Inflow from Operations", [
+        "Private", "Government", "International", "Licensors",
+    ]),
+    ("outflows", "Cash Outflows from Operations", [
+        "Salaries and other Staff Cost",
+        "Suppliers Payments",
+        "Security Deposit",
+        "GOSI, Utility Bills & Others",
+        "VAT & Insurance",
+        "Board of Directors' Remuneration",
+        "Financial Exp / Income",
+        "Petty Cash Reimbursement",
+    ]),
+    ("invest", "Cashflow from Investments", [
+        "Other Collection",
+        "Dividend Payment",
+        "CAPEX",
+        "CAPEX - Others",
+        "CAPEX - Berrechid Site",
+        "CAPEX - Tangier Site",
+    ]),
+    ("financing", "Cashflow from Financing", [
+        "Islamic Deposit Inflows",
+        "Islamic Deposit Outflows",
+        "Short Term Loan Drawdown",
+        "Long Term Loan Drawdown",
+        "Short Term Loan Repayment",
+        "Long Term Loan Repayment",
+    ]),
+]
+
+
+@app.get("/budget/cashflow_export.xlsx")
+def budget_cashflow_export(request: Request, session: Session = Depends(get_session)):
+    """Export rapport Cashflow Projection SPIMACO — FORECAST vs REEL par mois.
+    Structure identique au template 2026 cash reporting.xlsx fourni.
+    """
+    _ = get_current_user(request, session)
+
+    year_param = request.query_params.get("year")
+    try:
+        year_i = int(year_param) if year_param else date.today().year
+    except Exception:
+        year_i = date.today().year
+
+    months_range = list(range(1, 13))
+
+    # ---- Récupérer données FORECAST (BudgetLine) ----
+    budget_lines = session.exec(
+        select(BudgetLine).where(BudgetLine.year == year_i)
+    ).all()
+
+    # forecast[rubrique][month] = amount_planned
+    forecast: dict[str, dict[int, float]] = {}
+    for bl in budget_lines:
+        rub_key = (
+            (bl.cashflow_rubrique or bl.cashflow_category or "").strip().upper()
+        )
+        if not rub_key:
+            continue
+        if rub_key not in forecast:
+            forecast[rub_key] = {}
+        forecast[rub_key][bl.month] = float(bl.amount_planned or 0.0)
+
+    # ---- Récupérer données REEL (CashflowActual) ----
+    actual_rows = session.exec(
+        select(CashflowActual).where(
+            CashflowActual.actual_month.like(f"{year_i}-%")
+        )
+    ).all()
+
+    rub_map_db = {int(r.id): r for r in session.exec(select(CashflowRubrique)).all()}
+
+    # actual[rubrique_label][month] = sum(amounts)
+    actual: dict[str, dict[int, float]] = {}
+    for row in actual_rows:
+        rub_obj = rub_map_db.get(int(row.rubrique_id or 0))
+        rub_key = (
+            (rub_obj.rubrique if rub_obj else None)
+            or ""
+        ).strip().upper()
+        if not rub_key:
+            continue
+        try:
+            month_i = int(str(row.actual_month).split("-")[1])
+        except Exception:
+            continue
+        if rub_key not in actual:
+            actual[rub_key] = {}
+        actual[rub_key][month_i] = actual[rub_key].get(month_i, 0.0) + float(row.amount or 0.0)
+
+    # ---- Soldes bancaires réels par mois (ouverture/clôture) ----
+    txns_all = session.exec(
+        select(BankTxn)
+        .where(BankTxn.balance.isnot(None))
+        .where(BankTxn.date >= datetime(year_i, 1, 1))
+        .where(BankTxn.date < datetime(year_i + 1, 1, 1))
+        .order_by(BankTxn.date.asc())
+    ).all()
+
+    # closing_balance[month] = dernier solde connu du mois
+    closing_balance_by_month: dict[int, Optional[float]] = {}
+    for txn in txns_all:
+        try:
+            m = txn.date.month
+            closing_balance_by_month[m] = float(txn.balance or 0.0)
+        except Exception:
+            pass
+
+    # ---- Construction du workbook ----
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"{year_i} Treasury Budget"
+
+    BLUE_DARK  = "1F3864"
+    BLUE_MED   = "2E75B6"
+    BLUE_LIGHT = "D6E4F0"
+    GREY       = "F2F2F2"
+    GREEN      = "E2EFDA"
+    ORANGE     = "FCE4D6"
+    WHITE      = "FFFFFF"
+    RED        = "C00000"
+
+    SECTION_FILL    = PatternFill("solid", fgColor=BLUE_DARK)
+    SECTION_FONT    = Font(bold=True, color=WHITE, size=10)
+    SUBTOTAL_FILL   = PatternFill("solid", fgColor=BLUE_MED)
+    SUBTOTAL_FONT   = Font(bold=True, color=WHITE, size=9)
+    FORECAST_FILL   = PatternFill("solid", fgColor=BLUE_LIGHT)
+    REEL_FILL       = PatternFill("solid", fgColor=GREEN)
+    HEADER_FONT     = Font(bold=True, size=9)
+    DATA_FONT       = Font(size=9)
+    AMT_FMT         = '#,##0'
+    C_ALIGN         = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    R_ALIGN         = Alignment(horizontal="right",  vertical="center")
+    L_ALIGN         = Alignment(horizontal="left",   vertical="center")
+
+    # Ligne 1 : titre
+    total_cols = 2 + len(months_range) * 2
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+    ws.cell(row=1, column=1, value="SPIMACO Group - CASHFLOW PROJECTION").font = Font(bold=True, size=14, color=BLUE_DARK)
+    ws.cell(row=1, column=1).alignment = C_ALIGN
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=total_cols)
+    ws.cell(row=2, column=1, value=f"Année : {year_i}   |   Extrait au {date.today().strftime('%d/%m/%Y')}").font = Font(size=9, italic=True, color="595959")
+    ws.cell(row=2, column=1).alignment = C_ALIGN
+
+    # Ligne 3 : en-têtes mois (date fin de mois)
+    import calendar
+    ws.cell(row=3, column=1, value="").fill = PatternFill("solid", fgColor=BLUE_DARK)
+    ws.cell(row=3, column=2, value="").fill = PatternFill("solid", fgColor=BLUE_DARK)
+    for mi, m in enumerate(months_range):
+        last_day = calendar.monthrange(year_i, m)[1]
+        col_f = 3 + mi * 2
+        col_r = col_f + 1
+        end_dt = date(year_i, m, last_day)
+        ws.cell(row=3, column=col_f, value=end_dt.strftime("%b %Y")).fill = FORECAST_FILL
+        ws.cell(row=3, column=col_f).font = Font(bold=True, size=9, color=BLUE_DARK)
+        ws.cell(row=3, column=col_f).alignment = C_ALIGN
+        ws.cell(row=3, column=col_r, value=end_dt.strftime("%b %Y")).fill = REEL_FILL
+        ws.cell(row=3, column=col_r).font = Font(bold=True, size=9, color="1A5C23")
+        ws.cell(row=3, column=col_r).alignment = C_ALIGN
+
+    # Ligne 4 : FORECAST / REEL
+    ws.cell(row=4, column=1, value="").fill = PatternFill("solid", fgColor=BLUE_DARK)
+    ws.cell(row=4, column=2, value="").fill = PatternFill("solid", fgColor=BLUE_DARK)
+    for mi in range(len(months_range)):
+        col_f = 3 + mi * 2
+        col_r = col_f + 1
+        c_f = ws.cell(row=4, column=col_f, value="FORECAST")
+        c_f.fill = FORECAST_FILL
+        c_f.font = Font(bold=True, size=8, color=BLUE_DARK)
+        c_f.alignment = C_ALIGN
+        c_r = ws.cell(row=4, column=col_r, value="REEL")
+        c_r.fill = REEL_FILL
+        c_r.font = Font(bold=True, size=8, color="1A5C23")
+        c_r.alignment = C_ALIGN
+
+    ws.row_dimensions[3].height = 22
+    ws.row_dimensions[4].height = 18
+
+    # Colonnes fixes
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 42
+    for mi in range(len(months_range)):
+        col_f = 3 + mi * 2
+        col_r = col_f + 1
+        ws.column_dimensions[get_column_letter(col_f)].width = 15
+        ws.column_dimensions[get_column_letter(col_r)].width = 15
+
+    current_row = 5
+
+    def _get_val(data_dict: dict[str, dict[int, float]], rub_key: str, month_i: int) -> float:
+        """Cherche dans le dict la valeur pour une rubrique (insensible à la casse)."""
+        rub_up = rub_key.strip().upper()
+        for k, v in data_dict.items():
+            if k.upper() == rub_up:
+                return v.get(month_i, 0.0)
+        return 0.0
+
+    def _map_to_spimaco_label(rub_key: str, section_id: str) -> Optional[str]:
+        """Retourne le label SPIMACO correspondant à une rubrique, si connu."""
+        mapped = SPIMACO_RUBRIQUE_MAP.get(rub_key.strip().upper())
+        if mapped and mapped[0] == section_id:
+            return mapped[1]
+        return None
+
+    def write_section_header(label: str):
+        nonlocal current_row
+        ws.merge_cells(start_row=current_row, start_column=2, end_row=current_row, end_column=total_cols)
+        c = ws.cell(row=current_row, column=2, value=label)
+        c.fill = SECTION_FILL
+        c.font = SECTION_FONT
+        c.alignment = L_ALIGN
+        ws.row_dimensions[current_row].height = 18
+        current_row += 1
+
+    def write_data_row(label: str, section_id: str, is_subtotal: bool = False) -> dict[int, tuple[float, float]]:
+        nonlocal current_row
+        values: dict[int, tuple[float, float]] = {}
+        spimaco_label = _map_to_spimaco_label(label, section_id)
+
+        # Cherche dans forecast et actual par label SPIMACO ou par rubrique directe
+        for mi, m in enumerate(months_range):
+            # FORECAST
+            fc_val = 0.0
+            for rk, rl in SPIMACO_RUBRIQUE_MAP.items():
+                if rl[0] == section_id and rl[1] == label:
+                    fc_val += _get_val(forecast, rk, m)
+
+            # REEL
+            rl_val = 0.0
+            for rk, rl in SPIMACO_RUBRIQUE_MAP.items():
+                if rl[0] == section_id and rl[1] == label:
+                    rl_val += _get_val(actual, rk, m)
+
+            values[m] = (fc_val, rl_val)
+
+        fill = SUBTOTAL_FILL if is_subtotal else None
+        fnt  = SUBTOTAL_FONT if is_subtotal else DATA_FONT
+        ws.cell(row=current_row, column=2, value=("  " if not is_subtotal else "") + label)
+        if fill:
+            ws.cell(row=current_row, column=2).fill = fill
+        ws.cell(row=current_row, column=2).font = fnt
+        ws.cell(row=current_row, column=2).alignment = L_ALIGN
+
+        for mi, m in enumerate(months_range):
+            fc_val, rl_val = values[m]
+            col_f = 3 + mi * 2
+            col_r = col_f + 1
+            c_f = ws.cell(row=current_row, column=col_f, value=round(fc_val, 0) if fc_val != 0.0 else None)
+            c_r = ws.cell(row=current_row, column=col_r, value=round(rl_val, 0) if rl_val != 0.0 else None)
+            c_f.number_format = AMT_FMT
+            c_r.number_format = AMT_FMT
+            c_f.alignment = R_ALIGN
+            c_r.alignment = R_ALIGN
+            c_f.font = fnt
+            c_r.font = fnt
+            if fill:
+                c_f.fill = fill
+                c_r.fill = fill
+
+        ws.row_dimensions[current_row].height = 16
+        current_row += 1
+        return values
+
+    def write_special_row(label: str, values_fc: dict[int, float], values_rl: dict[int, float],
+                          fill_color: Optional[str] = None, font_color: str = "000000", bold: bool = True):
+        nonlocal current_row
+        fill = PatternFill("solid", fgColor=fill_color) if fill_color else None
+        fnt  = Font(bold=bold, size=9, color=font_color)
+        ws.cell(row=current_row, column=2, value=label)
+        ws.cell(row=current_row, column=2).font = fnt
+        ws.cell(row=current_row, column=2).alignment = L_ALIGN
+        if fill:
+            ws.cell(row=current_row, column=2).fill = fill
+
+        for mi, m in enumerate(months_range):
+            col_f = 3 + mi * 2
+            col_r = col_f + 1
+            fv = values_fc.get(m, 0.0)
+            rv = values_rl.get(m, 0.0)
+            c_f = ws.cell(row=current_row, column=col_f, value=round(fv, 0) if fv != 0.0 else None)
+            c_r = ws.cell(row=current_row, column=col_r, value=round(rv, 0) if rv != 0.0 else None)
+            c_f.number_format = AMT_FMT
+            c_r.number_format = AMT_FMT
+            c_f.alignment = R_ALIGN
+            c_r.alignment = R_ALIGN
+            c_f.font = fnt
+            c_r.font = fnt
+            if fill:
+                c_f.fill = fill
+                c_r.fill = fill
+
+        ws.row_dimensions[current_row].height = 16
+        current_row += 1
+
+    # ---- Solde d'ouverture ----
+    # Ligne Opening Cash Balance (solde bancaire réel ouverture)
+    open_fc: dict[int, float] = {}
+    open_rl: dict[int, float] = {}
+    prev_closing = closing_balance_by_month.get(0, None)  # inconnu avant jan
+    for m in months_range:
+        open_fc[m] = 0.0  # à remplir si budget contient un solde initial
+        open_rl[m] = closing_balance_by_month.get(m - 1, 0.0) if m > 1 else 0.0
+    write_special_row("Opening Cash Balance", open_fc, open_rl, fill_color="D9E1F2", bold=True)
+
+    # ---- Sections ----
+    section_totals_fc: dict[str, dict[int, float]] = {}
+    section_totals_rl: dict[str, dict[int, float]] = {}
+
+    for sec_id, sec_label, sec_lines in SPIMACO_SECTIONS:
+        write_section_header(sec_label)
+        tot_fc: dict[int, float] = {m: 0.0 for m in months_range}
+        tot_rl: dict[int, float] = {m: 0.0 for m in months_range}
+
+        for line_label in sec_lines:
+            row_vals = write_data_row(line_label, sec_id)
+            for m, (fc, rl) in row_vals.items():
+                tot_fc[m] = tot_fc.get(m, 0.0) + fc
+                tot_rl[m] = tot_rl.get(m, 0.0) + rl
+
+        # Total section
+        total_label = f"Total {sec_label.split(':')[0].replace('Cashflow from ', 'Net Cashflow from ')}"
+        write_special_row(total_label, tot_fc, tot_rl, fill_color=BLUE_LIGHT, bold=True)
+        section_totals_fc[sec_id] = tot_fc
+        section_totals_rl[sec_id] = tot_rl
+
+    # ---- Net Cashflow Movement ----
+    net_fc: dict[int, float] = {}
+    net_rl: dict[int, float] = {}
+    for m in months_range:
+        net_fc[m] = sum(section_totals_fc[s].get(m, 0.0) for s, _, _ in SPIMACO_SECTIONS)
+        net_rl[m] = sum(section_totals_rl[s].get(m, 0.0) for s, _, _ in SPIMACO_SECTIONS)
+    write_special_row("Net Cashflow Movement", net_fc, net_rl, fill_color="1F3864", font_color=WHITE, bold=True)
+
+    # ---- Closing Cash Balance ----
+    close_fc: dict[int, float] = {}
+    close_rl: dict[int, float] = {}
+    for m in months_range:
+        close_fc[m] = open_fc.get(m, 0.0) + net_fc.get(m, 0.0)
+        close_rl[m] = closing_balance_by_month.get(m, 0.0)
+    write_special_row("Closing Cash Balance", close_fc, close_rl, fill_color="375623", font_color=WHITE, bold=True)
+
+    ws.freeze_panes = ws.cell(row=5, column=3)
+
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return Response(
+        content=out.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=cashflow_projection_{year_i}.xlsx"},
+    )
+
+
+# ============================================================
+# ÉTAT DE RAPPROCHEMENT MENSUEL
+# ============================================================
+
+@app.get("/rapprochement/export_mensuel.xlsx")
+def rapprochement_export_mensuel(request: Request, session: Session = Depends(get_session)):
+    """Export état de rapprochement mensuel — toutes les transactions bancaires
+    avec leur statut de rapprochement et les factures associées.
+    """
+    _ = get_current_user(request, session)
+
+    month_param = request.query_params.get("month")  # YYYY-MM
+    if not month_param:
+        month_param = date.today().strftime("%Y-%m")
+
+    try:
+        y, mo = int(month_param.split("-")[0]), int(month_param.split("-")[1])
+    except Exception:
+        y, mo = date.today().year, date.today().month
+
+    import calendar
+    last_day = calendar.monthrange(y, mo)[1]
+    start_dt = datetime(y, mo, 1)
+    end_dt   = datetime(y, mo, last_day, 23, 59, 59)
+
+    # Toutes les transactions du mois
+    txns = session.exec(
+        select(BankTxn)
+        .where(BankTxn.date >= start_dt)
+        .where(BankTxn.date <= end_dt)
+        .order_by(BankTxn.date.asc(), BankTxn.id.asc())
+    ).all()
+
+    # Map banktxn_id -> matches
+    match_rows = session.exec(select(InvoicePaymentMatch)).all()
+    matches_by_txn: dict[int, list[InvoicePaymentMatch]] = {}
+    for mr in match_rows:
+        tid = int(mr.banktxn_id or 0)
+        if tid not in matches_by_txn:
+            matches_by_txn[tid] = []
+        matches_by_txn[tid].append(mr)
+
+    # Map invoice_id -> invoice
+    all_inv_ids = {mr.invoice_id for rows in matches_by_txn.values() for mr in rows}
+    inv_map: dict[int, Invoice] = {}
+    if all_inv_ids:
+        for inv in session.exec(select(Invoice).where(Invoice.id.in_(all_inv_ids))).all():
+            inv_map[int(inv.id)] = inv
+
+    # CashflowActual hors facture (qualifiées)
+    cf_hors_fac = session.exec(
+        select(CashflowActual).where(CashflowActual.invoice_id == None)
+    ).all()
+    cf_hors_fac_by_txn: dict[int, CashflowActual] = {}
+    for cf in cf_hors_fac:
+        if cf.banktxn_id:
+            cf_hors_fac_by_txn[int(cf.banktxn_id)] = cf
+    cf_rub_map = {int(r.id): r for r in session.exec(select(CashflowRubrique)).all()}
+
+    # ---- Workbook ----
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Rapprochement {month_param}"
+
+    BLUE_DARK  = "1F3864"
+    GREEN_DARK = "375623"
+    RED_DARK   = "C00000"
+    GREY_LIGHT = "F2F2F2"
+    GREEN_L    = "E2EFDA"
+    RED_L      = "FFE0E0"
+    YELLOW_L   = "FFF2CC"
+    BLUE_L     = "D6E4F0"
+    WHITE      = "FFFFFF"
+
+    H_FILL = PatternFill("solid", fgColor=BLUE_DARK)
+    H_FONT = Font(bold=True, color=WHITE, size=9)
+    C_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    L_ALIGN = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    R_ALIGN = Alignment(horizontal="right",  vertical="center")
+    AMT_FMT = '#,##0.00'
+    T_FONT  = Font(size=9)
+
+    # Titre
+    month_label = date(y, mo, 1).strftime("%B %Y")
+    ws.merge_cells("A1:P1")
+    ws["A1"] = f"ÉTAT DE RAPPROCHEMENT BANCAIRE — {month_label.upper()}"
+    ws["A1"].font = Font(bold=True, size=13, color=BLUE_DARK)
+    ws["A1"].alignment = C_ALIGN
+    ws.row_dimensions[1].height = 26
+
+    ws.merge_cells("A2:P2")
+    ws["A2"] = f"Période : du 01/{mo:02d}/{y} au {last_day:02d}/{mo:02d}/{y}   |   Extrait au {date.today().strftime('%d/%m/%Y')}"
+    ws["A2"].font = Font(size=8, italic=True, color="595959")
+    ws["A2"].alignment = C_ALIGN
+
+    # En-têtes (16 colonnes)
+    COL_HEADERS = [
+        "Date opération",
+        "Date valeur",
+        "Banque",
+        "N° compte",
+        "Libellé",
+        "Débit",
+        "Crédit",
+        "Solde",
+        "Statut rapprochement",
+        "N° Facture",
+        "Fournisseur",
+        "Montant facture TTC",
+        "Montant rapproché",
+        "Écart",
+        "Rubrique cashflow",
+        "Note",
+    ]
+
+    HDR_ROW = 4
+    for ci, h in enumerate(COL_HEADERS, 1):
+        c = ws.cell(row=HDR_ROW, column=ci, value=h)
+        c.fill = H_FILL
+        c.font = H_FONT
+        c.alignment = C_ALIGN
+    ws.row_dimensions[HDR_ROW].height = 36
+    ws.freeze_panes = f"A{HDR_ROW + 1}"
+
+    # Totaux accumulateurs
+    total_debit = total_credit = 0.0
+    total_rappr = total_non_rappr = 0.0
+    cnt_rappr = cnt_non_rappr = cnt_hors_fac = 0
+    data_row = HDR_ROW + 1
+
+    STATUS_LABELS = {
+        "RAPPROCHEE":   "✅ Rapprochée",
+        "HORS_FACTURE": "📋 Hors facture",
+        "QUALIFIEE":    "📋 Qualifiée",
+        "A_CLASSER":    "⏳ À classer",
+        "A_RAPPROCHER": "🔗 À rapprocher",
+        "FACTURE":      "🔗 À rapprocher",
+        "ECARTEE":      "❌ Écartée",
+        "IMPORTED":     "⏳ Importée",
+    }
+
+    for txn in txns:
+        tid = int(txn.id or 0)
+        txn_matches = matches_by_txn.get(tid, [])
+        cf_hf = cf_hors_fac_by_txn.get(tid)
+
+        # Statut
+        if txn_matches:
+            statut_code = "RAPPROCHEE"
+        elif cf_hf:
+            statut_code = "HORS_FACTURE"
+        else:
+            statut_code = (txn.processing_status or "IMPORTED").strip().upper()
+
+        statut_label = STATUS_LABELS.get(statut_code, statut_code)
+
+        # Couleur par statut
+        if statut_code == "RAPPROCHEE":
+            row_fill = PatternFill("solid", fgColor=GREEN_L)
+            cnt_rappr += 1
+        elif statut_code in ("HORS_FACTURE", "QUALIFIEE"):
+            row_fill = PatternFill("solid", fgColor=BLUE_L)
+            cnt_hors_fac += 1
+        elif statut_code == "ECARTEE":
+            row_fill = PatternFill("solid", fgColor=GREY_LIGHT)
+        else:
+            row_fill = PatternFill("solid", fgColor=YELLOW_L)
+            cnt_non_rappr += 1
+
+        dbt = float(txn.debit or 0.0)
+        crd = float(txn.credit or 0.0)
+        total_debit  += dbt
+        total_credit += crd
+
+        # Si plusieurs factures matchées sur cette transaction
+        if txn_matches:
+            first = True
+            for mr in txn_matches:
+                inv = inv_map.get(int(mr.invoice_id or 0))
+                inv_no   = inv.invoice_no   or "" if inv else ""
+                inv_sup  = inv.supplier_name or "" if inv else ""
+                inv_ttc  = float((inv.amount_ttc if inv and inv.amount_ttc is not None else (inv.amount if inv else 0.0)) or 0.0)
+                matched_amt = float(mr.matched_amount or 0.0)
+                ecart = round(matched_amt - inv_ttc, 2) if inv else 0.0
+
+                total_rappr += matched_amt
+
+                rubrique_label = ""
+                if cf_hf and cf_hf.rubrique_id:
+                    rub = cf_rub_map.get(int(cf_hf.rubrique_id))
+                    rubrique_label = rub.rubrique if rub else ""
+
+                row_vals = [
+                    txn.date.date().isoformat() if first else "",
+                    txn.value_date.date().isoformat() if (first and txn.value_date) else "",
+                    (txn.bank_name or "") if first else "",
+                    (txn.account_no or "") if first else "",
+                    (txn.label or "") if first else "",
+                    dbt if first else None,
+                    crd if first else None,
+                    float(txn.balance or 0.0) if (first and txn.balance is not None) else None,
+                    statut_label if first else "",
+                    inv_no,
+                    inv_sup,
+                    inv_ttc if inv else None,
+                    matched_amt,
+                    ecart if ecart != 0.0 else None,
+                    rubrique_label,
+                    (mr.notes or ""),
+                ]
+                _write_rappr_row(ws, data_row, row_vals, row_fill, T_FONT, L_ALIGN, R_ALIGN, AMT_FMT)
+                data_row += 1
+                first = False
+        else:
+            rubrique_label = ""
+            if cf_hf and cf_hf.rubrique_id:
+                rub = cf_rub_map.get(int(cf_hf.rubrique_id))
+                rubrique_label = rub.rubrique if rub else ""
+
+            total_non_rappr += dbt or crd
+
+            row_vals = [
+                txn.date.date().isoformat(),
+                txn.value_date.date().isoformat() if txn.value_date else "",
+                txn.bank_name or "",
+                txn.account_no or "",
+                txn.label or "",
+                dbt or None,
+                crd or None,
+                float(txn.balance or 0.0) if txn.balance is not None else None,
+                statut_label,
+                "", "", None, None, None,
+                rubrique_label,
+                "",
+            ]
+            _write_rappr_row(ws, data_row, row_vals, row_fill, T_FONT, L_ALIGN, R_ALIGN, AMT_FMT)
+            data_row += 1
+
+    # Ligne totaux
+    TOTAL_ROW = data_row + 1
+    bold9 = Font(bold=True, size=9)
+    ws.cell(row=TOTAL_ROW, column=1, value="TOTAUX").font = bold9
+    ws.cell(row=TOTAL_ROW, column=6, value=round(total_debit, 2)).font = bold9
+    ws.cell(row=TOTAL_ROW, column=6).number_format = AMT_FMT
+    ws.cell(row=TOTAL_ROW, column=7, value=round(total_credit, 2)).font = bold9
+    ws.cell(row=TOTAL_ROW, column=7).number_format = AMT_FMT
+    ws.cell(row=TOTAL_ROW, column=13, value=round(total_rappr, 2)).font = bold9
+    ws.cell(row=TOTAL_ROW, column=13).number_format = AMT_FMT
+
+    # Feuille Résumé
+    ws2 = wb.create_sheet("Résumé")
+    ws2.merge_cells("A1:C1")
+    ws2["A1"] = f"RÉSUMÉ RAPPROCHEMENT — {month_label.upper()}"
+    ws2["A1"].font = Font(bold=True, size=12, color=BLUE_DARK)
+    ws2["A1"].alignment = C_ALIGN
+    for ci, lbl in enumerate(["Indicateur", "Valeur", "Note"], 1):
+        c = ws2.cell(row=3, column=ci, value=lbl)
+        c.fill = H_FILL
+        c.font = H_FONT
+        c.alignment = C_ALIGN
+    summary2 = [
+        ("Nombre de transactions", len(txns), ""),
+        ("Transactions rapprochées",  cnt_rappr, "✅"),
+        ("Transactions hors facture / qualifiées", cnt_hors_fac, "📋"),
+        ("Transactions non rapprochées", cnt_non_rappr, "⏳"),
+        ("", "", ""),
+        ("Total débits (MAD)", round(total_debit, 2), ""),
+        ("Total crédits (MAD)", round(total_credit, 2), ""),
+        ("Montant total rapproché (MAD)", round(total_rappr, 2), ""),
+        ("Montant non rapproché (MAD)", round(total_non_rappr, 2), "À vérifier"),
+    ]
+    for ri, (lbl, val, note) in enumerate(summary2, 4):
+        ws2.cell(row=ri, column=1, value=lbl).font = Font(bold=True if lbl else False, size=9)
+        c2 = ws2.cell(row=ri, column=2, value=val)
+        c2.font = Font(size=9)
+        if isinstance(val, float):
+            c2.number_format = AMT_FMT
+        ws2.cell(row=ri, column=3, value=note).font = Font(size=8, italic=True, color="595959")
+    ws2.column_dimensions["A"].width = 40
+    ws2.column_dimensions["B"].width = 20
+    ws2.column_dimensions["C"].width = 20
+
+    # Largeurs colonnes état principal
+    col_widths_rappr = [14, 14, 18, 18, 50, 14, 14, 14, 22, 16, 30, 16, 16, 12, 24, 20]
+    for ci, w in enumerate(col_widths_rappr, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+    fname = f"rapprochement_{month_param}.xlsx"
+    return Response(
+        content=out.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+def _write_rappr_row(ws, row: int, values: list, fill, t_font, l_align, r_align, amt_fmt):
+    """Helper : écrit une ligne de rapprochement avec styles."""
+    AMT_COLS = {6, 7, 8, 12, 13, 14}
+    for ci, val in enumerate(values, 1):
+        c = ws.cell(row=row, column=ci, value=val)
+        c.font = t_font
+        c.alignment = r_align if ci in AMT_COLS else l_align
+        if ci in AMT_COLS and val is not None:
+            c.number_format = amt_fmt
+        if fill:
+            c.fill = fill
+    ws.row_dimensions[row].height = 15
+
+
+# ============================================================
+# IMPORT EXCEL CASHFLOW SPIMACO → BUDGET LINES
+# ============================================================
+
+@app.post("/budget/import_cashflow")
+async def budget_import_cashflow(
+    request: Request,
+    session: Session = Depends(get_session),
+    year: int = Form(...),
+    file: UploadFile = File(...),
+):
+    """Importe le fichier Excel SPIMACO (26 Treasury Budget) vers les BudgetLines.
+    Lit les colonnes FORECAST par mois et met à jour / crée les BudgetLines correspondantes.
+    """
+    _ = get_current_user(request, session)
+
+    content = await file.read()
+    if not content:
+        return RedirectResponse(f"/budget?year={year}&msg=empty", status_code=303)
+
+    try:
+        wb = openpyxl.load_workbook(filename=BytesIO(content), data_only=True)
+    except Exception:
+        return RedirectResponse(f"/budget?year={year}&msg=bad_format", status_code=303)
+
+    # Chercher la feuille contenant le budget (Treasury Budget ou première visible)
+    target_ws = None
+    for sheet in wb.worksheets:
+        sn = sheet.title.lower()
+        if "treasury" in sn or "budget" in sn or "cashflow" in sn or "cash" in sn:
+            target_ws = sheet
+            break
+    if not target_ws:
+        visible = [s for s in wb.worksheets if s.sheet_state == "visible"]
+        target_ws = visible[0] if visible else wb.active
+
+    rows_data = list(target_ws.iter_rows(values_only=True))
+
+    # Trouver les colonnes FORECAST par mois (ligne avec "FORECAST" / "REEL")
+    # et la ligne des rubriques (colonne B avec des labels)
+    month_forecast_cols: dict[int, int] = {}  # month (1-12) -> col_index (0-based)
+    rubrique_col = 1  # colonne B (index 1)
+
+    import calendar
+
+    for ri, row in enumerate(rows_data[:10]):
+        if row and any(str(v or "").strip().upper() == "FORECAST" for v in row):
+            # ligne trouvée : récupérer les mois depuis la ligne précédente
+            date_row = rows_data[ri - 1] if ri > 0 else []
+            for ci, (dv, fv) in enumerate(zip(date_row, row)):
+                if str(fv or "").strip().upper() == "FORECAST":
+                    # dv devrait être une date ou un label de mois
+                    m = None
+                    if isinstance(dv, (datetime, date)):
+                        m = dv.month if hasattr(dv, "month") else None
+                    elif isinstance(dv, str):
+                        # essayer de parser "Jan 2026" etc.
+                        import re as _re
+                        mo_match = _re.search(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", dv.lower())
+                        mo_map = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+                                  "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+                        if mo_match:
+                            m = mo_map.get(mo_match.group(1))
+                    if m and 1 <= m <= 12:
+                        month_forecast_cols[m] = ci
+            break
+
+    # Mapping label row → rubrique SPIMACO
+    label_to_spimaco: dict[str, str] = {}
+    for rub_code, (sec_id, label) in SPIMACO_RUBRIQUE_MAP.items():
+        label_to_spimaco[label.upper()] = rub_code
+
+    inserted = updated = 0
+    for row in rows_data:
+        if not row or len(row) <= rubrique_col:
+            continue
+        label_raw = str(row[rubrique_col] or "").strip()
+        if not label_raw:
+            continue
+
+        # Trouver la rubrique correspondante
+        rub_code = label_to_spimaco.get(label_raw.upper())
+        if not rub_code:
+            # Chercher correspondance approximative
+            for k, v in label_to_spimaco.items():
+                if k in label_raw.upper() or label_raw.upper() in k:
+                    rub_code = v
+                    break
+        if not rub_code:
+            continue
+
+        mapped = SPIMACO_RUBRIQUE_MAP.get(rub_code)
+        if not mapped:
+            continue
+        sec_id, spimaco_label = mapped
+
+        # Catégorie cashflow
+        cat_map = {"inflows": "ENCAISSEMENTS", "outflows": "DECAISSEMENTS",
+                   "invest": "INVESTISSEMENTS", "financing": "FINANCEMENT"}
+        cashflow_cat = cat_map.get(sec_id, sec_id.upper())
+
+        for m, col_idx in month_forecast_cols.items():
+            if col_idx >= len(row):
+                continue
+            val = row[col_idx]
+            if val is None:
+                continue
+            try:
+                amount = float(val)
+            except Exception:
+                continue
+
+            # Upsert BudgetLine
+            existing = session.exec(
+                select(BudgetLine)
+                .where(BudgetLine.year == year)
+                .where(BudgetLine.month == m)
+                .where(BudgetLine.cashflow_rubrique == rub_code)
+            ).first()
+
+            if existing:
+                existing.amount_planned = amount
+                existing.cashflow_category = cashflow_cat
+                session.add(existing)
+                updated += 1
+            else:
+                bl = BudgetLine(
+                    year=year,
+                    month=m,
+                    currency="MAD",
+                    amount_planned=amount,
+                    cashflow_rubrique=rub_code,
+                    cashflow_category=cashflow_cat,
+                    notes=f"Importé depuis {file.filename}",
+                )
+                session.add(bl)
+                inserted += 1
+
+    session.commit()
+    return RedirectResponse(
+        f"/budget?year={year}&msg=import_ok&inserted={inserted}&updated={updated}",
+        status_code=303,
+    )
 

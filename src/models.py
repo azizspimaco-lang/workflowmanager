@@ -345,6 +345,10 @@ class PaymentBatch(SQLModel, table=True):
     payment_date: datetime
     total_amount: float = 0.0
 
+    payment_type: str = Field(default="VIREMENT", max_length=20, index=True)
+    instrument_ref: Optional[str] = Field(default=None, max_length=80)
+    note: Optional[str] = Field(default=None, max_length=200)
+
     status: str = Field(default="DRAFT", max_length=20)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -391,3 +395,36 @@ class CompanyBankAccount(SQLModel, table=True):
 
     attestation_filename: Optional[str] = Field(default=None, max_length=255)
     attestation_path: Optional[str] = Field(default=None, max_length=255)
+
+
+# ---------------- BUDGET COMPTABLE V3 ----------------
+
+class GlBalanceLine(SQLModel, table=True):
+    """Ligne de balance générale importée mensuellement depuis le système comptable externe."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    period_month: str = Field(index=True, max_length=7)  # YYYY-MM
+    gl_account: str = Field(index=True, max_length=20)
+    account_label: Optional[str] = Field(default=None, max_length=160)
+
+    debit: float = 0.0
+    credit: float = 0.0
+    net_amount: float = 0.0
+
+    source_filename: Optional[str] = Field(default=None, max_length=255)
+    imported_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class GlBudgetTarget(SQLModel, table=True):
+    """Cible budgétaire comptable par compte général et par mois."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    period_month: str = Field(index=True, max_length=7)  # YYYY-MM
+    gl_account: str = Field(index=True, max_length=20)
+    account_label: Optional[str] = Field(default=None, max_length=160)
+
+    budget_amount: float = 0.0
+    budget_group: Optional[str] = Field(default=None, max_length=80, index=True)
+    note: Optional[str] = Field(default=None, max_length=200)
+
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)

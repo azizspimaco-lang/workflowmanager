@@ -2,10 +2,10 @@
 {% block content %}
 
 <div class="erp">
-  <h1 class="page-title">Ordres de virement</h1>
+  <h1 class="page-title">Règlements émis</h1>
 
   <div class="card section-gap" style="margin-bottom:12px;">
-    <h3 style="margin:0 0 10px;">Créer un ordre de virement</h3>
+    <h3 style="margin:0 0 10px;">Créer un règlement</h3>
 
 <form method="post" action="/reglements/create" class="form">
   <label>Compte à débiter</label>
@@ -20,6 +20,20 @@
 
   <label style="margin-top:10px;">Date d’exécution</label>
   <input type="date" name="payment_date" class="input" value="{{ today }}"/>
+
+  <label style="margin-top:10px;">Type de règlement</label>
+  <select name="payment_type" class="input">
+    <option value="VIREMENT">Virement</option>
+    <option value="CHEQUE">Chèque</option>
+    <option value="EFFET">Effet</option>
+    <option value="AUTRE">Autre</option>
+  </select>
+
+  <label style="margin-top:10px;">Référence instrument</label>
+  <input name="instrument_ref" class="input" placeholder="N° chèque / effet / référence virement" />
+
+  <label style="margin-top:10px;">Note</label>
+  <input name="note" class="input" placeholder="Optionnel" />
 
   <button class="btn btn-primary" type="submit" style="margin-top:12px;">Créer</button>
 
@@ -39,7 +53,9 @@
           <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Banque</th>
           <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Compte</th>
           <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Date</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Type</th>
           <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Total</th>
+          <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Référence</th>
           <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Statut</th>
           <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;"></th>
         </tr>
@@ -52,7 +68,9 @@
             <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.bank_name }}</td>
             <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.debit_account }}</td>
             <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.payment_date.date().isoformat() }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">{{ payment_type_label(b.payment_type) }}</td>
             <td style="padding:8px; border-bottom:1px solid #eee;">{{ "%.2f"|format(b.total_amount or 0.0) }}</td>
+            <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.instrument_ref or "-" }}</td>
             <td style="padding:8px; border-bottom:1px solid #eee;">{{ b.status }}</td>
             <td style="padding:8px; border-bottom:1px solid #eee;">
               <a class="btn-secondary" href="/reglements/{{ b.id }}">Ouvrir</a>
@@ -67,7 +85,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="7" class="muted" style="padding:10px;">Aucun ordre pour l’instant.</td></tr>
+          <tr><td colspan="9" class="muted" style="padding:10px;">Aucun ordre pour l’instant.</td></tr>
         {% endfor %}
       </tbody>
     </table>

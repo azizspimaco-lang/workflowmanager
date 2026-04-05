@@ -1,195 +1,217 @@
 {% extends "_base.html" %}
 {% block content %}
 
-<div class="erp">
+<div class="page-head" style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+  <div>
+    <h1 style="margin:0;">Relevés bancaires</h1>
+    <div class="muted">Journal bancaire mensuel non destructif. Les lignes restent historisées et sont orientées vers le rapprochement ou la qualification.</div>
+  </div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+    <a class="btn-secondary" href="/matching">Module rapprochement</a>
+    <a class="btn-secondary" href="/qualification">Module qualification</a>
+  </div>
+</div>
 
-  <div class="card section-gap" style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+{% if msg %}
+<div class="card" style="margin-top:12px; border-left:4px solid #2563eb;">
+  <b>Statut :</b>
+  {% if msg == 'import_ok' %}Import terminé ({{ n or 0 }} ligne{{ '' if (n or '0') == '1' else 's' }} nouvelle{{ '' if (n or '0') == '1' else 's' }})
+  {% elif msg in ['to_hors_facture', 'to_hors_facture_bulk'] %}Ligne(s) orientée(s) vers la qualification hors facture. {% if n %}{{ n }} traitée(s).{% endif %}{% if blocked %} {{ blocked }} bloquée(s).{% endif %}
+  {% elif msg in ['to_facture', 'to_facture_bulk'] %}Ligne(s) orientée(s) vers le rapprochement facture / règlement. {% if n %}{{ n }} traitée(s).{% endif %}{% if blocked %} {{ blocked }} bloquée(s).{% endif %}
+  {% elif msg in ['discard_ok', 'discard_one_ok'] %}Ligne(s) écartée(s) du workflow sans suppression. {% if n %}{{ n }} traitée(s).{% endif %}{% if blocked %} {{ blocked }} bloquée(s).{% endif %}
+  {% elif msg == 'restore_ok' %}Ligne remise dans la file à classer.
+  {% elif msg == 'txn_already_matched' %}Impossible : le mouvement est déjà rapproché.
+  {% elif msg == 'no_selection' %}Sélectionne au moins une ligne.
+  {% elif msg == 'releves_load_error' %}Certaines données n'ont pas pu être chargées proprement.
+  {% else %}{{ msg }}{% endif %}
+</div>
+{% endif %}
+
+<div class="kpi-grid" style="margin-top:14px; grid-template-columns: repeat(6, minmax(0, 1fr));">
+  <a class="card kpi-card" href="/releves"><div class="kpi-title">Tous</div><div class="kpi-value">{{ stats.all }}</div></a>
+  <a class="card kpi-card" href="/releves?view=unmatched"><div class="kpi-title">À classer</div><div class="kpi-value">{{ stats.a_classer }}</div></a>
+  <a class="card kpi-card" href="/releves?view=to_match"><div class="kpi-title">À rapprocher</div><div class="kpi-value">{{ stats.a_rapprocher }}</div></a>
+  <a class="card kpi-card" href="/releves?view=hors_facture"><div class="kpi-title">Hors facture</div><div class="kpi-value">{{ stats.hors_facture }}</div></a>
+  <a class="card kpi-card" href="/releves?view=qualified"><div class="kpi-title">Qualifiés</div><div class="kpi-value">{{ stats.qualifies }}</div></a>
+  <a class="card kpi-card" href="/releves?view=ecartees"><div class="kpi-title">Écartés</div><div class="kpi-value">{{ stats.ecartees }}</div></a>
+</div>
+
+<div class="card section-gap" style="margin-top:14px;">
+  <div style="display:flex; justify-content:space-between; gap:14px; align-items:flex-start; flex-wrap:wrap;">
     <div>
-      <h1 style="margin:0;">Relevés bancaires</h1>
-      <div class="muted">Module source : import, normalisation, stockage et suivi des mouvements bancaires.</div>
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <a class="btn-secondary" href="/matching">Rapprochement & qualification</a>
-      <a class="btn-secondary" href="/budget/allocations">Budget</a>
-      <a class="btn-secondary" href="/analytics/allocations">Analytique</a>
+      <h3 style="margin:0 0 6px;">Importer un relevé</h3>
+      <div class="muted">Classement par banque et par compte société. Les relevés restent conservés par mois et par banque.</div>
     </div>
   </div>
-
-  {% set msg_texts = {
-    "import_ok": "Relevé importé avec succès.",
-    "empty": "Le fichier importé est vide.",
-    "bad_format": "Format non supporté. Merci d'importer un fichier CSV ou Excel (.xlsx/.xls).",
-    "parse_error": "Le fichier n'a pas pu être lu. Vérifie le format et la structure du relevé.",
-    "missing_account": "Sélectionne d'abord une banque et un compte configurés dans le module Banques.",
-    "bad_account": "Le compte bancaire sélectionné est introuvable ou inactif.",
-    "delete_one_ok": "Mouvement supprimé avec succès.",
-    "delete_blocked_matched": "Impossible de supprimer un mouvement déjà rapproché. Annule d'abord le rapprochement.",
-    "delete_ok": "Suppression terminée.",
-    "no_selection": "Sélectionne au moins un mouvement à supprimer.",
-    "bad_txn": "Mouvement introuvable.",
-    "releves_load_error": "Certaines données n'ont pas pu être chargées correctement.",
-    "to_hors_facture": "Le mouvement a été classé hors facture.",
-    "to_hors_facture_bulk": "Les mouvements sélectionnés ont été classés hors facture.",
-    "to_facture": "Le mouvement a été affecté aux factures / règlements."
-  } %}
-  {% if msg %}
-  {% set ok_msgs = ['import_ok', 'delete_one_ok', 'delete_ok'] %}
-  <div class="card" style="margin-top:12px; border-left:4px solid {% if msg in ok_msgs %}#10b981{% else %}#ef4444{% endif %};">
-    <div><b>{{ msg_texts.get(msg, msg) }}</b>
-      {% if msg == 'import_ok' and n %} {{ n }} mouvement(s) inséré(s).{% endif %}
-      {% if msg == 'delete_ok' %}
-        {% if n %} {{ n }} mouvement(s) supprimé(s).{% endif %}
-        {% if request.query_params.get('blocked') and request.query_params.get('blocked') != '0' %}
-          {{ request.query_params.get('blocked') }} ignoré(s) car déjà rapprochés.
-        {% endif %}
-      {% endif %}
+  {% if accounts %}
+  <form method="post" action="/releves/import" enctype="multipart/form-data" style="display:grid; grid-template-columns:repeat(4,minmax(180px,1fr)); gap:10px; align-items:end; margin-top:12px;">
+    <div>
+      <label class="muted">Banque</label><br/>
+      <select id="bank_select" style="width:100%;">
+        <option value="">Choisir une banque</option>
+        {% for bank_name in accounts|map(attribute='bank_name')|unique|list %}
+          <option value="{{ bank_name }}">{{ bank_name }}</option>
+        {% endfor %}
+      </select>
     </div>
+    <div>
+      <label class="muted">Compte société</label><br/>
+      <select id="company_bank_account_id" name="company_bank_account_id" required style="width:100%;">
+        <option value="">Choisir un compte</option>
+        {% for acc in accounts %}
+          <option value="{{ acc.id }}" data-bank="{{ acc.bank_name }}">{{ acc.bank_name }} — {{ acc.account_no }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="muted">Devise</label><br/>
+      <input name="currency" value="MAD" style="width:100%;" />
+    </div>
+    <div>
+      <label class="muted">Fichier</label><br/>
+      <input type="file" name="file" accept=".csv,.xlsx,.xls" required style="width:100%;" />
+    </div>
+    <div style="grid-column:1 / -1; display:flex; justify-content:flex-end;">
+      <button class="btn btn-primary" type="submit">⬆️ Importer le relevé</button>
+    </div>
+  </form>
+  {% else %}
+  <div class="card" style="margin-top:10px; background:#fff7ed; border:1px solid #fdba74;">
+    <b>Aucun compte bancaire configuré.</b><br/>
+    <span class="muted">Ajoute d'abord un compte société dans <a href="/banks">Banques</a>.</span>
   </div>
   {% endif %}
+</div>
 
-  <div class="card section-gap" style="margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0;">
-    <div style="font-weight:700; margin-bottom:6px;">Organisation figée des modules</div>
-    <div class="muted">
-      Relevés bancaires = import et stockage. Rapprochement & qualification = lien avec factures ou classement hors facture.
-      Budget et Analytique = affectations de gestion. Délais de paiement = alimentés par les factures et les paiements confirmés.
-    </div>
-  </div>
-
-  <div class="card section-gap" style="margin-top:12px;">
-    <h3 style="margin:0 0 10px;">Importer un relevé</h3>
-    {% if accounts %}
-    <form method="post" action="/releves/import" enctype="multipart/form-data" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
-      <div>
-        <label class="muted">Banque</label><br/>
-        <select id="bank_select" style="min-width:220px;">
-          <option value="">Choisir une banque</option>
-          {% for bank_name in accounts|map(attribute='bank_name')|unique|list %}
-            <option value="{{ bank_name }}">{{ bank_name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label class="muted">Compte</label><br/>
-        <select id="company_bank_account_id" name="company_bank_account_id" required style="min-width:320px;">
-          <option value="">Choisir un compte</option>
-          {% for acc in accounts %}
-            <option value="{{ acc.id }}" data-bank="{{ acc.bank_name }}">{{ acc.bank_name }} — {{ acc.account_no }}{% if acc.iban %} — {{ acc.iban }}{% endif %}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label class="muted">Devise</label><br/>
-        <input name="currency" value="MAD" style="width:90px;" />
-      </div>
-      <div>
-        <label class="muted">Fichier</label><br/>
-        <input type="file" name="file" accept=".csv,.xlsx,.xls" required />
-        <div class="muted" style="margin-top:4px; font-size:12px;">PDF non accepté dans ce module.</div>
-      </div>
-      <button class="btn btn-primary" type="submit">⬆️ Importer</button>
-    </form>
-    <div class="muted" style="margin-top:10px;">La banque et le compte proviennent des comptes société configurés dans le module Banques.</div>
-    {% else %}
-    <div class="card" style="background:#fff7ed; border:1px solid #fdba74;">
-      <div><b>Aucun compte bancaire configuré.</b></div>
-      <div class="muted" style="margin-top:4px;">Ajoute d'abord un compte dans le module <a href="/banks">Banques</a>, puis reviens ici pour importer un relevé.</div>
-    </div>
-    {% endif %}
-  </div>
-
-  <div class="card section-gap" style="margin-top:12px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+<div class="card section-gap" style="margin-top:14px;">
+  <form method="get" action="/releves" style="display:grid; grid-template-columns: 180px 180px 1fr auto; gap:10px; align-items:end;">
+    <input type="hidden" name="view" value="{{ view }}" />
     <div>
-      <h3 style="margin:0;">Mouvements importés ({{ txns|length }})</h3>
-      <div class="muted">Vue source uniquement. Les traitements se font dans les modules dédiés.</div>
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <a class="btn-secondary {% if view == 'all' %}active{% endif %}" href="/releves">Tous</a>
-      <a class="btn-secondary {% if view == 'unmatched' %}active{% endif %}" href="/releves?view=unmatched">À classer</a>
-      <a class="btn-secondary {% if view == 'matched' %}active{% endif %}" href="/releves?view=matched">Rapprochés</a>
-      <a class="btn-secondary {% if view == 'classified' %}active{% endif %}" href="/releves?view=classified">Classés hors facture</a>
-    </div>
-  </div>
-
-  <div class="card section-gap" style="margin-top:12px; overflow:auto;">
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px;">
-      <div class="muted">Les suppressions restent disponibles ici pour le nettoyage des imports.</div>
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        {% if view == 'unmatched' %}
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <button class="btn-secondary" type="button" id="selectAllClassify">Tout sélectionner</button>
-          <button class="btn" type="button" id="bulkClassifySubmit">Classer hors facture la sélection</button>
-        </div>
-        {% endif %}
-        <form id="bulkDeleteForm" method="post" action="/releves/delete-selected" onsubmit="return confirm('Supprimer les mouvements sélectionnés ? Les mouvements déjà rapprochés ne seront pas supprimés.');" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <button class="btn-secondary" type="button" id="toggleDeleteCandidates">Sélectionner commissions / frais / TVA</button>
-          <button class="btn" type="submit">🗑️ Supprimer la sélection</button>
-        </form>
-      </div>
-    </div>
-
-    <table class="table">
-      <thead>
-        <tr>
-          <th style="width:36px;"><input type="checkbox" id="checkAllDelete" /></th>
-          <th>Date valeur</th>
-          <th>Débit</th>
-          <th>Crédit</th>
-          <th>Libellé</th>
-          <th>Statut</th>
-          <th>Traitement</th>
-          <th>Suppression</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in txns %}
-        {% set txn_id = t.id %}
-        {% set state = processing_map.get(txn_id, {'label':'Importé','badge':'#eef2ff'}) %}
-        {% set is_matched = (txn_id in matched_ids) %}
-        {% set is_classified = (txn_id in classified_ids) %}
-        <tr>
-          <td>
-            {% if not is_matched %}
-              <input type="checkbox" class="delete-box classify-box" form="bulkDeleteForm" name="txn_ids" value="{{ txn_id }}" data-label="{{ (t.label or '')|lower }}" />
-            {% endif %}
-          </td>
-          <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
-          <td style="text-align:right;">{% if t.debit %}{{ "%.2f"|format(t.debit) }}{% endif %}</td>
-          <td style="text-align:right;">{% if t.credit %}{{ "%.2f"|format(t.credit) }}{% endif %}</td>
-          <td style="max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ t.label }}</td>
-          <td><span class="badge" style="background:{{ state.badge }};">{{ state.label }}</span></td>
-          <td style="min-width:360px;">
-            {% if is_matched %}
-              <a class="btn-secondary" href="/matching">Voir rapprochement</a>
-              <a class="btn-secondary" href="/factures">Voir facture</a>
-            {% elif is_classified %}
-              <form method="post" action="/releves/{{ txn_id }}/to_facture" style="display:inline;">
-                <button class="btn-secondary" type="submit">Affecter aux factures / règlements</button>
-              </form>
-              <a class="btn-secondary" href="/cashflow">Flux réel</a>
-            {% else %}
-              <form method="post" action="/releves/{{ txn_id }}/to_facture" style="display:inline;">
-                <button class="btn" type="submit">Affecter aux factures / règlements</button>
-              </form>
-              <form method="post" action="/releves/{{ txn_id }}/to_hors_facture" style="display:inline; margin-left:6px;">
-                <button class="btn-secondary" type="submit">Classer hors facture</button>
-              </form>
-            {% endif %}
-          </td>
-          <td>
-            {% if is_matched %}
-              <span class="muted" style="font-size:12px;">Protégé</span>
-            {% else %}
-              <form method="post" action="/releves/{{ txn_id }}/delete" style="display:inline;">
-                <button class="btn-secondary" type="submit" onclick="return confirm('Supprimer ce mouvement importé ?');">Supprimer</button>
-              </form>
-            {% endif %}
-          </td>
-        </tr>
+      <label class="muted">Banque</label><br/>
+      <select name="bank" style="width:100%;">
+        <option value="">Toutes</option>
+        {% for item in banks %}
+          <option value="{{ item }}" {% if bank == item %}selected{% endif %}>{{ item }}</option>
         {% endfor %}
-      </tbody>
-    </table>
+      </select>
+    </div>
+    <div>
+      <label class="muted">Mois</label><br/>
+      <select name="month" style="width:100%;">
+        <option value="">Tous</option>
+        {% for item in months %}
+          <option value="{{ item }}" {% if month == item %}selected{% endif %}>{{ item }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="muted">Recherche</label><br/>
+      <input name="q" value="{{ q }}" placeholder="libellé, banque, compte..." style="width:100%;" />
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-primary" type="submit">Filtrer</button>
+      <a class="btn-secondary" href="/releves?view={{ view }}">Réinitialiser</a>
+    </div>
+  </form>
+</div>
+
+<div class="card section-gap" style="margin-top:14px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+  <div>
+    <h3 style="margin:0;">Vue de traitement</h3>
+    <div class="muted">{{ txns|length }} mouvement(s) dans la vue courante.</div>
+  </div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    <a class="btn-secondary {% if view == 'all' %}active{% endif %}" href="/releves">Tous</a>
+    <a class="btn-secondary {% if view in ['unmatched','a_classer'] %}active{% endif %}" href="/releves?view=unmatched">À classer</a>
+    <a class="btn-secondary {% if view in ['to_match','a_rapprocher'] %}active{% endif %}" href="/releves?view=to_match">À rapprocher</a>
+    <a class="btn-secondary {% if view in ['hors_facture','classified'] %}active{% endif %}" href="/releves?view=hors_facture">Hors facture</a>
+    <a class="btn-secondary {% if view in ['qualified','qualifies'] %}active{% endif %}" href="/releves?view=qualified">Qualifiés</a>
+    <a class="btn-secondary {% if view in ['matched','rapproches'] %}active{% endif %}" href="/releves?view=matched">Rapprochés</a>
+    <a class="btn-secondary {% if view in ['ecartees','discarded'] %}active{% endif %}" href="/releves?view=ecartees">Écartés</a>
+  </div>
+</div>
+
+<div class="card section-gap" style="margin-top:14px; overflow:auto;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 12px;">
+    <div class="muted">Actions de masse disponibles sur les lignes non rapprochées.</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button class="btn-secondary" type="button" id="checkAllBtn">Tout sélectionner</button>
+      <button class="btn-secondary" type="button" id="bulkToFacture">Affecter aux factures / règlements</button>
+      <button class="btn-secondary" type="button" id="bulkToHorsFacture">Classer hors facture</button>
+      <button class="btn-secondary" type="button" id="bulkDiscard">Écarter sans supprimer</button>
+    </div>
   </div>
 
+  <table class="table">
+    <thead>
+      <tr>
+        <th style="width:36px;"><input type="checkbox" id="checkAll" /></th>
+        <th>Date valeur</th>
+        <th>Banque</th>
+        <th>Débit</th>
+        <th>Crédit</th>
+        <th>Libellé</th>
+        <th>Statut</th>
+        <th>Note</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in txns %}
+      {% set txn_id = t.id %}
+      {% set state = processing_map.get(txn_id, {'label':'Importé','badge':'#eef2ff','status':'A_CLASSER'}) %}
+      {% set is_matched = (state.status == 'RAPPROCHEE') %}
+      <tr>
+        <td>
+          {% if not is_matched %}
+          <input type="checkbox" class="mass-box" name="txn_ids" value="{{ txn_id }}" />
+          {% endif %}
+        </td>
+        <td>{{ (t.value_date or t.date).date().isoformat() }}</td>
+        <td>{{ t.bank_name or '-' }}<div class="muted" style="font-size:12px;">{{ t.account_no or '' }}</div></td>
+        <td style="text-align:right;">{% if t.debit %}{{ "%.2f"|format(t.debit) }}{% endif %}</td>
+        <td style="text-align:right;">{% if t.credit %}{{ "%.2f"|format(t.credit) }}{% endif %}</td>
+        <td style="max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ t.label }}</td>
+        <td><span class="badge" style="background:{{ state.badge }};">{{ state.label }}</span></td>
+        <td class="muted">{{ t.processing_note or '—' }}</td>
+        <td style="min-width:340px;">
+          {% if state.status == 'RAPPROCHEE' %}
+            <a class="btn-secondary" href="/matching">Voir rapprochement</a>
+          {% elif state.status == 'QUALIFIEE' %}
+            <a class="btn-secondary" href="/qualification?status=qualified">Voir qualification</a>
+            <form method="post" action="/releves/{{ txn_id }}/restore" style="display:inline; margin-left:6px;">
+              <button class="btn-secondary" type="submit">Remettre à classer</button>
+            </form>
+          {% elif state.status == 'HORS_FACTURE' %}
+            <a class="btn-secondary" href="/qualification?status=open">Qualifier</a>
+            <form method="post" action="/releves/{{ txn_id }}/restore" style="display:inline; margin-left:6px;">
+              <button class="btn-secondary" type="submit">Remettre à classer</button>
+            </form>
+          {% elif state.status == 'A_RAPPROCHER' %}
+            <a class="btn-secondary" href="/matching?txn={{ txn_id }}">Rapprocher</a>
+            <form method="post" action="/releves/{{ txn_id }}/restore" style="display:inline; margin-left:6px;">
+              <button class="btn-secondary" type="submit">Remettre à classer</button>
+            </form>
+          {% elif state.status == 'ECARTEE' %}
+            <form method="post" action="/releves/{{ txn_id }}/restore" style="display:inline;">
+              <button class="btn-secondary" type="submit">Réintégrer</button>
+            </form>
+          {% else %}
+            <form method="post" action="/releves/{{ txn_id }}/to_facture" style="display:inline;">
+              <button class="btn" type="submit">Affecter aux factures / règlements</button>
+            </form>
+            <form method="post" action="/releves/{{ txn_id }}/to_hors_facture" style="display:inline; margin-left:6px;">
+              <button class="btn-secondary" type="submit">Classer hors facture</button>
+            </form>
+            <form method="post" action="/releves/{{ txn_id }}/delete" style="display:inline; margin-left:6px;">
+              <button class="btn-secondary" type="submit">Écarter</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 
 <script>
@@ -197,84 +219,51 @@
   const bankSelect = document.getElementById('bank_select');
   const accountSelect = document.getElementById('company_bank_account_id');
   if (bankSelect && accountSelect) {
-    const allOptions = Array.from(accountSelect.querySelectorAll('option')).map(o => ({
-      value: o.value,
-      text: o.text,
-      bank: o.dataset.bank || ''
-    }));
-
+    const allOptions = Array.from(accountSelect.querySelectorAll('option')).map(o => ({ value:o.value, text:o.text, bank:o.dataset.bank || '' }));
     function rebuild(bank){
       const current = accountSelect.value;
       accountSelect.innerHTML = '';
       const empty = document.createElement('option');
-      empty.value = '';
-      empty.textContent = 'Choisir un compte';
+      empty.value=''; empty.textContent='Choisir un compte';
       accountSelect.appendChild(empty);
       allOptions.forEach(opt => {
         if (!opt.value) return;
-        if (!bank || opt.bank === bank){
+        if (!bank || opt.bank === bank) {
           const el = document.createElement('option');
-          el.value = opt.value;
-          el.textContent = opt.text;
-          el.dataset.bank = opt.bank;
+          el.value = opt.value; el.textContent = opt.text; el.dataset.bank = opt.bank;
           if (opt.value === current) el.selected = true;
           accountSelect.appendChild(el);
         }
       });
     }
-
     bankSelect.addEventListener('change', function(){ rebuild(this.value); });
   }
 
-  const checkAll = document.getElementById('checkAllDelete');
-  if (checkAll) {
-    checkAll.addEventListener('change', function(){
-      document.querySelectorAll('.delete-box').forEach(cb => { cb.checked = !!checkAll.checked; });
+  function selectedIds(){ return Array.from(document.querySelectorAll('.mass-box:checked')).map(el => el.value); }
+  function submitBulk(action, confirmText){
+    const ids = selectedIds();
+    if (!ids.length) { alert('Sélectionne au moins une ligne.'); return; }
+    if (confirmText && !confirm(confirmText)) return;
+    const form = document.createElement('form');
+    form.method = 'post'; form.action = action;
+    ids.forEach(id => {
+      const input = document.createElement('input');
+      input.type = 'hidden'; input.name = 'txn_ids'; input.value = id; form.appendChild(input);
     });
+    document.body.appendChild(form); form.submit();
   }
 
-  const selectAllClassify = document.getElementById('selectAllClassify');
-  if (selectAllClassify) {
-    selectAllClassify.addEventListener('click', function(){
-      document.querySelectorAll('.classify-box').forEach(cb => { cb.checked = true; });
-      if (checkAll) checkAll.checked = true;
-    });
-  }
+  const checkAll = document.getElementById('checkAll');
+  if (checkAll) checkAll.addEventListener('change', function(){ document.querySelectorAll('.mass-box').forEach(cb => cb.checked = !!checkAll.checked); });
+  const checkAllBtn = document.getElementById('checkAllBtn');
+  if (checkAllBtn) checkAllBtn.addEventListener('click', function(){ document.querySelectorAll('.mass-box').forEach(cb => cb.checked = true); if (checkAll) checkAll.checked = true; });
 
-  const bulkClassifySubmit = document.getElementById('bulkClassifySubmit');
-  if (bulkClassifySubmit) {
-    bulkClassifySubmit.addEventListener('click', function(){
-      const selected = Array.from(document.querySelectorAll('.classify-box:checked')).map(cb => cb.value);
-      if (!selected.length) {
-        alert('Sélectionne au moins une ligne.');
-        return;
-      }
-      if (!confirm('Classer hors facture les mouvements sélectionnés ?')) return;
-      const form = document.createElement('form');
-      form.method = 'post';
-      form.action = '/releves/to_hors_facture_selected';
-      selected.forEach(function(id){
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'txn_ids';
-        input.value = id;
-        form.appendChild(input);
-      });
-      document.body.appendChild(form);
-      form.submit();
-    });
-  }
-
-  const toggle = document.getElementById('toggleDeleteCandidates');
-  if (toggle) {
-    toggle.addEventListener('click', function(){
-      document.querySelectorAll('.delete-box').forEach(cb => {
-        const label = (cb.dataset.label || '');
-        const looksLikeFee = /commission|frais|agios|tva|taxe|int[eé]r[êe]t/.test(label);
-        cb.checked = looksLikeFee;
-      });
-    });
-  }
+  const bulkToFacture = document.getElementById('bulkToFacture');
+  if (bulkToFacture) bulkToFacture.addEventListener('click', function(){ submitBulk('/releves/to_facture_selected', 'Affecter la sélection au rapprochement facture / règlement ?'); });
+  const bulkToHorsFacture = document.getElementById('bulkToHorsFacture');
+  if (bulkToHorsFacture) bulkToHorsFacture.addEventListener('click', function(){ submitBulk('/releves/to_hors_facture_selected', 'Classer la sélection en hors facture ?'); });
+  const bulkDiscard = document.getElementById('bulkDiscard');
+  if (bulkDiscard) bulkDiscard.addEventListener('click', function(){ submitBulk('/releves/delete-selected', 'Écarter la sélection sans supprimer les lignes du journal bancaire ?'); });
 })();
 </script>
 

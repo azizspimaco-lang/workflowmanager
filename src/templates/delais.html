@@ -64,6 +64,7 @@
           <th class="num">Montant</th>
           <th>Devise</th>
           <th>Statut</th>
+          <th>Mode / source</th>
           <th style="width:80px;">Actions</th>
         </tr>
       </thead>
@@ -85,6 +86,14 @@
           <td class="num">{{ "%.2f"|format(amt) }}</td>
           <td>{{ (r.currency or "MAD")|upper }}</td>
           <td>{{ (r.status or "")|upper }}</td>
+          {% set batch = payment_batch_by_invoice.get(r.id) %}
+          <td>
+            {% if batch %}
+              {{ payment_type_label(batch.payment_type) }}{% if batch.instrument_ref %}<div class="muted" style="font-size:12px;">{{ batch.instrument_ref }}</div>{% endif %}
+            {% else %}
+              {{ (r.payment_mode or "")|upper }}
+            {% endif %}
+          </td>
           <td>
             <form method="post" action="/factures/{{ r.id }}/delete?next=/delais" class="js-delete-invoice" style="display:inline;">
               <button class="btn-danger" type="submit" title="Supprimer">🗑️</button>
@@ -92,7 +101,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="15" class="muted">Aucune facture éligible.</td></tr>
+        <tr><td colspan="16" class="muted">Aucune facture éligible.</td></tr>
       {% endfor %}
       </tbody>
     </table>

@@ -1,58 +1,62 @@
 {% extends "_base.html" %}
 {% block content %}
 
-<div class="dashboard">
+<div class="page-head" style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+  <div>
+    <h1 style="margin:0;">Dashboard V3</h1>
+    <div class="muted">Vue cible : cycle achats, relevés bancaires non destructifs, rapprochement, qualification et pilotage budget.</div>
+  </div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+    <a class="btn-secondary" href="/factures">Factures</a>
+    <a class="btn-secondary" href="/releves?view=unmatched">Relevés</a>
+    <a class="btn-secondary" href="/budget-comptable">Budget comptable</a>
+  </div>
+</div>
 
-  <!-- ===== KPI GRID (4 colonnes) ===== -->
-  <div class="kpi-grid">
-    <div class="card kpi-card">
-      <div class="kpi-title">Factures en cours</div>
-      <div class="kpi-value">{{ kpi_invoices }}</div>
-    </div>
+<div class="kpi-grid" style="margin-top:14px;">
+  <div class="card kpi-card"><div class="kpi-title">Factures en cours</div><div class="kpi-value">{{ kpi_invoices }}</div></div>
+  <div class="card kpi-card"><div class="kpi-title">Total à payer</div><div class="kpi-value">{{ kpi_total_due }}</div></div>
+  <div class="card kpi-card"><div class="kpi-title">Échues</div><div class="kpi-value">{{ kpi_overdue }}</div></div>
+  <div class="card kpi-card"><div class="kpi-title">Réalisé cash du mois</div><div class="kpi-value">{{ kpi_month_paid }}</div></div>
+</div>
 
-    <div class="card kpi-card">
-      <div class="kpi-title">Total à payer</div>
-      <div class="kpi-value">{{ kpi_total_due }}</div>
-    </div>
-
-    <div class="card kpi-card">
-      <div class="kpi-title">Échues</div>
-      <div class="kpi-value">{{ kpi_overdue }}</div>
-    </div>
-
-    <div class="card kpi-card">
-      <div class="kpi-title">Paiements ce mois</div>
-      <div class="kpi-value">{{ kpi_month_paid }}</div>
-    </div>
+<div class="dashboard-bottom-grid" style="margin-top:14px; grid-template-columns: 1.15fr .85fr;">
+  <div class="card">
+    <h3 style="margin-top:0;">Pipeline relevés bancaires</h3>
+    <div class="row-line"><span>À classer</span><span><b>{{ releve_counts.a_classer }}</b></span></div>
+    <div class="row-line"><span>À rapprocher</span><span><b>{{ releve_counts.a_rapprocher }}</b></span></div>
+    <div class="row-line"><span>Hors facture à qualifier</span><span><b>{{ releve_counts.hors_facture }}</b></span></div>
+    <div class="row-line"><span>Qualifiés</span><span><b>{{ releve_counts.qualifies }}</b></span></div>
+    <div class="row-line"><span>Rapprochés</span><span><b>{{ releve_counts.rapproches }}</b></span></div>
+    <div class="row-line"><span>Écartés sans suppression</span><span><b>{{ releve_counts.ecartees }}</b></span></div>
   </div>
 
+  <div class="card">
+    <h3 style="margin-top:0;">Budget comptable</h3>
+    <div class="row-line"><span>Mois courant</span><span><b>{{ gl_month }}</b></span></div>
+    <div class="row-line"><span>Balance importée</span><span><b>{{ gl_total }}</b></span></div>
+    <div class="muted" style="margin-top:8px;">Commence à alimenter le pilotage budgétaire via l'import mensuel de la balance générale.</div>
+  </div>
+</div>
 
-  <!-- ===== SECTION BAS (2 colonnes dédiées) ===== -->
-  <div class="dashboard-bottom-grid">
-
-    <div class="card">
-      <h3>Prochaines échéances</h3>
-      {% for inv in upcoming_invoices %}
-        <div class="row-line">
-          <span>{{ inv.supplier_name }}</span>
-          <span>{{ inv.due_date }}</span>
-          <span>{{ inv.amount }}</span>
-        </div>
-      {% endfor %}
-    </div>
-
-    <div class="card">
-      <h3>Top factures en cours</h3>
-      {% for inv in top_invoices %}
-        <div class="row-line">
-          <span>{{ inv.supplier_name }}</span>
-          <span>{{ inv.amount }}</span>
-        </div>
-      {% endfor %}
-    </div>
-
+<div class="dashboard-bottom-grid" style="margin-top:14px; grid-template-columns: 1fr 1fr;">
+  <div class="card">
+    <h3 style="margin-top:0;">Prochaines échéances</h3>
+    {% for inv in upcoming_invoices %}
+      <div class="row-line"><span>{{ inv.supplier_name or '-' }}</span><span>{{ inv.legal_due_date.date().isoformat() if inv.legal_due_date else '-' }}</span><span>{{ "%.2f"|format(inv.amount_ttc or inv.amount or 0) }}</span></div>
+    {% else %}
+      <div class="muted">Aucune échéance ouverte.</div>
+    {% endfor %}
   </div>
 
+  <div class="card">
+    <h3 style="margin-top:0;">Top factures ouvertes</h3>
+    {% for inv in top_invoices %}
+      <div class="row-line"><span>{{ inv.supplier_name or '-' }}</span><span>{{ inv.invoice_no or '-' }}</span><span>{{ "%.2f"|format(inv.amount_ttc or inv.amount or 0) }}</span></div>
+    {% else %}
+      <div class="muted">Aucune facture ouverte.</div>
+    {% endfor %}
+  </div>
 </div>
 
 {% endblock %}

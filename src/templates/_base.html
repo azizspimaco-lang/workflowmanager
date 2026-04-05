@@ -28,32 +28,33 @@
 
       <nav class="sidebar-nav">
         <div class="nav-group nav-group-highlight">
-          <div class="nav-title">Démarrage rapide</div>
-          <a class="nav-link nav-link-primary {% if p.startswith('/factures') %}active{% endif %}" href="/factures">➕ Ajouter une facture</a>
+          <div class="nav-title">V3</div>
+          <a class="nav-link nav-link-primary {% if p.startswith('/dashboard') or p=='/' %}active{% endif %}" href="/dashboard">📊 Dashboard V3</a>
           <a class="nav-link {% if p.startswith('/todo') %}active{% endif %}" href="/todo">✅ À faire aujourd'hui</a>
           <a class="nav-link {% if p.startswith('/automation') %}active{% endif %}" href="/automation">🤖 Automatisation</a>
         </div>
 
         <div class="nav-group">
-          <div class="nav-title">Suivi quotidien</div>
-          <a class="nav-link {% if p=='/' %}active{% endif %}" href="/">Accueil</a>
+          <div class="nav-title">Cycle achats</div>
           <a class="nav-link {% if p.startswith('/factures') %}active{% endif %}" href="/factures">Factures</a>
-          <a class="nav-link {% if p.startswith('/planning') %}active{% endif %}" href="/planning">Paiements</a>
-          <a class="nav-link {% if p.startswith('/matching') %}active{% endif %}" href="/matching">Rapprochement & qualification</a>
+          <a class="nav-link {% if p.startswith('/reglements') or p.startswith('/planning') %}active{% endif %}" href="/reglements">Règlements</a>
+          <a class="nav-link {% if p.startswith('/delais') %}active{% endif %}" href="/delais">Délais de paiement</a>
+          <a class="nav-link {% if p.startswith('/analytics') %}active{% endif %}" href="/analytics">Analytique</a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Banque & trésorerie</div>
+          <a class="nav-link {% if p.startswith('/releves') %}active{% endif %}" href="/releves?view=unmatched">Relevés bancaires</a>
+          <a class="nav-link {% if p.startswith('/matching') %}active{% endif %}" href="/matching">Rapprochement</a>
+          <a class="nav-link {% if p.startswith('/qualification') %}active{% endif %}" href="/qualification">Qualification flux</a>
+          <a class="nav-link {% if p.startswith('/cashflow') or p.startswith('/tresorerie') %}active{% endif %}" href="/cashflow">Budget de trésorerie</a>
         </div>
 
         <div class="nav-group">
           <div class="nav-title">Pilotage</div>
-          <a class="nav-link {% if p.startswith('/tresorerie') %}active{% endif %}" href="/tresorerie">Trésorerie</a>
-          <a class="nav-link {% if p.startswith('/delais') %}active{% endif %}" href="/delais">Délais de paiement</a>
-          <a class="nav-link {% if p.startswith('/analytics') %}active{% endif %}" href="/analytics">Analytique</a>
-          <a class="nav-link {% if p.startswith('/budget') %}active{% endif %}" href="/budget">Budget</a>
-        </div>
-
-        <div class="nav-group">
-          <div class="nav-title">Référentiel</div>
+          <a class="nav-link {% if p.startswith('/budget-comptable') %}active{% endif %}" href="/budget-comptable">Budget comptable</a>
+          <a class="nav-link {% if p.startswith('/budget') %}active{% endif %}" href="/budget">Budget achats</a>
           <a class="nav-link {% if p.startswith('/suppliers') %}active{% endif %}" href="/suppliers">Fournisseurs</a>
-          <a class="nav-link {% if p.startswith('/releves') %}active{% endif %}" href="/releves">Relevés bancaires</a>
           <a class="nav-link {% if p.startswith('/banks') %}active{% endif %}" href="/banks">Comptes société</a>
         </div>
       </nav>

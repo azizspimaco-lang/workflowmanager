@@ -4,10 +4,12 @@
 <div class="erp">
   <div class="card section-gap" style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
     <div>
-      <h1 style="margin:0;">Ordre de virement #{{ batch.id }}</h1>
+      <h1 style="margin:0;">Règlement #{{ batch.id }}</h1>
       <div class="muted">Banque: <b>{{ batch.bank_name }}</b> | Compte: <b>{{ batch.debit_account }}</b></div>
       <div class="muted">Date exécution: <b>{{ batch.payment_date.date().isoformat() }}</b></div>
+      <div class="muted">Type: <b>{{ payment_type_label(batch.payment_type) }}</b>{% if batch.instrument_ref %} | Réf.: <b>{{ batch.instrument_ref }}</b>{% endif %}</div>
       <div class="muted">Statut: <b>{{ batch.status }}</b></div>
+      {% if batch.note %}<div class="muted">Note: {{ batch.note }}</div>{% endif %}
     </div>
 
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
@@ -19,7 +21,7 @@
       </form>
       {% endif %}
       <a class="btn btn-primary" href="/reglements/{{ batch.id }}/ordre_virement.pdf" target="_blank" rel="noopener">
-  🖨️ Ordre de virement (PDF)
+  🖨️ Bordereau paiement (PDF)
 </a>
 
       <a class="btn-secondary" href="/reglements/{{ batch.id }}/ordres_fournisseurs.zip">📦 PDF par fournisseur (ZIP)</a>

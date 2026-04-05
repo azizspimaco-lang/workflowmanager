@@ -107,6 +107,8 @@ from .models import (
     BudgetLine,
     Post,
     AllocationLine,
+    GlBalanceLine,
+    GlBudgetTarget,
 )
 
 # ---------------- PATHS / DB ----------------
@@ -197,6 +199,9 @@ def ensure_payment_tables_columns():
         ("debit_account", "VARCHAR(80)"),
         ("payment_date", "TIMESTAMP"),
         ("total_amount", "FLOAT"),
+        ("payment_type", "VARCHAR(20)"),
+        ("instrument_ref", "VARCHAR(80)"),
+        ("note", "VARCHAR(200)"),
         ("status", "VARCHAR(20)"),
         ("created_at", "TIMESTAMP"),
     ]
@@ -1073,28 +1078,54 @@ def _classified_banktxn_ids(session: Session) -> set[int]:
     return {int(r) for r in rows if r is not None}
 
 
+def _txn_effective_date(txn: BankTxn) -> datetime:
+    return getattr(txn, "value_date", None) or getattr(txn, "date", None) or datetime.min
+
+
+def _txn_month(txn: BankTxn) -> str:
+    dt = _txn_effective_date(txn)
+    return f"{dt.year:04d}-{dt.month:02d}" if dt != datetime.min else ""
+
+
+def _txn_status_code(txn: BankTxn, matched_ids: Optional[set[int]] = None, classified_ids: Optional[set[int]] = None) -> str:
+    txn_id = int(getattr(txn, "id", 0) or 0)
+    raw = (getattr(txn, "processing_status", None) or "IMPORTED").strip().upper()
+    if matched_ids and txn_id in matched_ids:
+        return "RAPPROCHEE"
+    if raw in ("RAPPROCHEE", "PAYEE"):
+        return "RAPPROCHEE"
+    if raw in ("ECARTEE", "IGNORED"):
+        return "ECARTEE"
+    if raw in ("QUALIFIEE",):
+        return "QUALIFIEE"
+    if classified_ids and txn_id in classified_ids:
+        return "QUALIFIEE"
+    if raw in ("HORS_FACTURE",):
+        return "HORS_FACTURE"
+    if raw in ("FACTURE", "A_RAPPROCHER"):
+        return "A_RAPPROCHER"
+    if raw in ("A_CLASSER", "IMPORTED", ""):
+        return "A_CLASSER"
+    return raw or "A_CLASSER"
+
+
 def _banktxn_processing_map(session: Session, txns: list[BankTxn]) -> dict[int, dict]:
     matched_ids = {int(x) for x in session.exec(select(InvoicePaymentMatch.banktxn_id)).all() if x is not None}
     classified_ids = _classified_banktxn_ids(session)
+    labels = {
+        "RAPPROCHEE": ("Rapproché facture / règlement", "#e8f7ee"),
+        "QUALIFIEE": ("Qualifié hors facture", "#ecfeff"),
+        "HORS_FACTURE": ("Hors facture à qualifier", "#fef3c7"),
+        "A_RAPPROCHER": ("À rapprocher", "#dbeafe"),
+        "A_CLASSER": ("À classer", "#fff6e5"),
+        "ECARTEE": ("Écarté sans suppression", "#f3f4f6"),
+    }
     processing = {}
     for txn in txns:
         txn_id = int(txn.id or 0)
-        status = "IMPORTED"
-        label = "Importé"
-        badge = "#eef2ff"
-        if txn_id in matched_ids:
-            status = "RECONCILED"
-            label = "Rapproché facture"
-            badge = "#e8f7ee"
-        elif txn_id in classified_ids:
-            status = "CLASSIFIED"
-            label = "Qualifié hors facture"
-            badge = "#ecfeff"
-        elif float(getattr(txn, "debit", 0.0) or 0.0) > 0 or float(getattr(txn, "credit", 0.0) or 0.0) > 0:
-            status = "TO_PROCESS"
-            label = "À traiter"
-            badge = "#fff6e5"
-        processing[txn_id] = {"status": status, "label": label, "badge": badge}
+        code = _txn_status_code(txn, matched_ids=matched_ids, classified_ids=classified_ids)
+        label, badge = labels.get(code, (code.title(), "#eef2ff"))
+        processing[txn_id] = {"status": code, "label": label, "badge": badge}
     return processing
 
 
@@ -2647,8 +2678,12 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
     user = get_current_user(request, session)
 
     view = (request.query_params.get("view") or "all").strip().lower()
+    bank = (request.query_params.get("bank") or "").strip()
+    month = (request.query_params.get("month") or "").strip()
+    q = (request.query_params.get("q") or "").strip().lower()
     msg = request.query_params.get("msg")
     n = request.query_params.get("n")
+    blocked = request.query_params.get("blocked")
 
     txns: list[BankTxn] = []
     matched_ids: set[int] = set()
@@ -2657,16 +2692,16 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
     has_error = False
 
     try:
-        txns = session.exec(select(BankTxn).limit(800)).all()
+        txns = session.exec(select(BankTxn).limit(1500)).all()
         txns = sorted(
             txns,
             key=lambda t: (
-                getattr(t, "value_date", None) or getattr(t, "date", None) or datetime.min,
+                _txn_effective_date(t),
                 getattr(t, "date", None) or datetime.min,
                 getattr(t, "id", 0) or 0,
             ),
             reverse=True,
-        )[:800]
+        )[:1500]
     except Exception:
         has_error = True
         txns = []
@@ -2682,28 +2717,6 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
     except Exception:
         has_error = True
         classified_ids = set()
-
-    if view == "unmatched":
-        txns = [
-            t for t in txns
-            if (int(t.id or 0) not in matched_ids)
-            and ((getattr(t, "processing_status", None) or "IMPORTED").strip().upper() not in ("FACTURE", "RAPPROCHEE", "HORS_FACTURE", "QUALIFIEE"))
-            and (int(t.id or 0) not in classified_ids)
-        ]
-    elif view == "matched":
-        txns = [
-            t for t in txns
-            if (int(t.id or 0) in matched_ids)
-            or ((getattr(t, "processing_status", None) or "").strip().upper() == "RAPPROCHEE")
-        ]
-    elif view == "classified":
-        txns = [
-            t for t in txns
-            if (
-                (int(t.id or 0) in classified_ids)
-                or ((getattr(t, "processing_status", None) or "").strip().upper() in ("HORS_FACTURE", "QUALIFIEE"))
-            ) and int(t.id or 0) not in matched_ids
-        ]
 
     try:
         accounts = session.exec(select(CompanyBankAccount)).all()
@@ -2722,7 +2735,66 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
     if has_error and not msg:
         msg = "releves_load_error"
 
+    banks = sorted({(t.bank_name or "").strip() for t in txns if (t.bank_name or "").strip()})
+    months = sorted({_txn_month(t) for t in txns if _txn_month(t)}, reverse=True)
+
     processing_map = _banktxn_processing_map(session, txns) if txns else {}
+
+    def _view_matches(txn: BankTxn) -> bool:
+        code = processing_map.get(int(txn.id or 0), {}).get("status") or _txn_status_code(txn, matched_ids, classified_ids)
+        if view == "all":
+            return True
+        if view in ("unmatched", "a_classer"):
+            return code == "A_CLASSER"
+        if view in ("to_match", "a_rapprocher"):
+            return code == "A_RAPPROCHER"
+        if view in ("matched", "rapproches"):
+            return code == "RAPPROCHEE"
+        if view in ("classified", "hors_facture"):
+            return code == "HORS_FACTURE"
+        if view in ("qualified", "qualifies"):
+            return code == "QUALIFIEE"
+        if view in ("discarded", "ecartees"):
+            return code == "ECARTEE"
+        return True
+
+    stats = {
+        "all": len(txns),
+        "a_classer": 0,
+        "a_rapprocher": 0,
+        "hors_facture": 0,
+        "qualifies": 0,
+        "matched": 0,
+        "ecartees": 0,
+    }
+    for t in txns:
+        code = processing_map.get(int(t.id or 0), {}).get("status") or _txn_status_code(t, matched_ids, classified_ids)
+        if code == "A_CLASSER":
+            stats["a_classer"] += 1
+        elif code == "A_RAPPROCHER":
+            stats["a_rapprocher"] += 1
+        elif code == "HORS_FACTURE":
+            stats["hors_facture"] += 1
+        elif code == "QUALIFIEE":
+            stats["qualifies"] += 1
+        elif code == "RAPPROCHEE":
+            stats["matched"] += 1
+        elif code == "ECARTEE":
+            stats["ecartees"] += 1
+
+    txns = [t for t in txns if _view_matches(t)]
+    if bank:
+        txns = [t for t in txns if (t.bank_name or "").strip() == bank]
+    if month:
+        txns = [t for t in txns if _txn_month(t) == month]
+    if q:
+        txns = [
+            t for t in txns
+            if q in (t.label or "").lower()
+            or q in (t.label_norm or "").lower()
+            or q in ((t.account_no or "").lower())
+            or q in ((t.bank_name or "").lower())
+        ]
 
     return templates.TemplateResponse(
         "releves.html",
@@ -2736,7 +2808,14 @@ def releves_page(request: Request, session: Session = Depends(get_session)):
             "accounts": accounts,
             "msg": msg,
             "n": n,
+            "blocked": blocked,
             "view": view,
+            "bank": bank,
+            "month": month,
+            "q": q,
+            "banks": banks,
+            "months": months,
+            "stats": stats,
         },
     )
 
@@ -2832,17 +2911,103 @@ def releve_to_facture(
         session.delete(row)
 
     txn.processing_status = "FACTURE"
+    txn.processing_note = "Orienté vers rapprochement facture / règlement"
     session.add(txn)
     session.commit()
-    return RedirectResponse("/releves?view=unmatched&msg=to_facture", status_code=303)
+    return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=to_facture", status_code=303)
 
 
 def _releves_back_url(request: Request, default_view: str = "unmatched") -> str:
     ref = (request.headers.get("referer") or "").strip()
-    if "/releves" in ref:
+    if "/releves" in ref or "/qualification" in ref or "/matching" in ref:
         sep = "&" if "?" in ref else "?"
         return f"{ref}{sep}"
     return f"/releves?view={default_view}&"
+
+
+def _clear_unmatched_cashflow_rows(session: Session, txn_id: int) -> None:
+    rows = session.exec(select(CashflowActual).where(CashflowActual.banktxn_id == txn_id, CashflowActual.invoice_id == None)).all()
+    for row in rows:
+        session.delete(row)
+
+def _payment_type_label(code: Optional[str]) -> str:
+    raw = (code or "VIREMENT").strip().upper()
+    mapping = {"VIREMENT": "Virement", "CHEQUE": "Chèque", "EFFET": "Effet", "AUTRE": "Autre"}
+    return mapping.get(raw, raw.title())
+
+
+def _guess_rubrique_for_txn(txn: BankTxn, rubriques: list[CashflowRubrique]) -> Optional[CashflowRubrique]:
+    label = _norm_label((txn.label_norm or txn.label or "").lower())
+    if not label:
+        return None
+    keyword_groups = [
+        (["frais", "commission", "agios", "tenue compte", "commission bancaire"], ["frais bancaire", "frais bancaires", "commission", "banque"]),
+        (["cnss", "amo", "cimr"], ["cnss", "social"]),
+        (["impot", "taxe", "tva", "is", "ir", "dgi", "tgr"], ["impot", "taxe", "fiscal", "tva"]),
+        (["salaire", "paie", "wage", "payroll"], ["salaire", "paie", "personnel"]),
+        (["virement interne", "vir interne", "transfert", "interco", "inter comptes"], ["interne", "virement interne", "transfert"]),
+        (["loyer"], ["loyer"]),
+        (["carburant", "station"], ["carburant", "transport"]),
+    ]
+    for label_keywords, rubrique_keywords in keyword_groups:
+        label_keys = [_norm_label(k.lower()) for k in label_keywords]
+        rubrique_keys = [_norm_label(k.lower()) for k in rubrique_keywords]
+        if not any(k in label for k in label_keys):
+            continue
+        for rub in (rubriques or []):
+            rub_norm = _norm_label((rub.rubrique or "").lower())
+            if any(k in rub_norm for k in rubrique_keys):
+                return rub
+    return None
+
+
+def _upsert_cashflow_actual_for_txn(session: Session, txn: BankTxn, rubrique_id: int, amount: Optional[float] = None) -> CashflowActual:
+    dt = txn.value_date or txn.date
+    month = f"{dt.year:04d}-{dt.month:02d}"
+    if amount is None:
+        amount = float(txn.debit or 0.0) if float(txn.debit or 0.0) > 0 else float(txn.credit or 0.0)
+    existing = session.exec(select(CashflowActual).where(CashflowActual.banktxn_id == int(txn.id or 0), CashflowActual.invoice_id == None)).first()
+    if existing:
+        existing.rubrique_id = rubrique_id
+        existing.actual_debit_date = dt
+        existing.actual_month = month
+        existing.amount = float(amount or 0.0)
+        session.add(existing)
+        return existing
+    cf = CashflowActual(rubrique_id=rubrique_id, invoice_id=None, banktxn_id=int(txn.id or 0), actual_debit_date=dt, actual_month=month, amount=float(amount or 0.0))
+    session.add(cf)
+    return cf
+
+
+@app.post("/releves/to_facture_selected")
+async def releves_to_facture_selected(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    _ = get_current_user(request, session)
+    form = await request.form()
+    raw_ids = form.getlist("txn_ids") if hasattr(form, "getlist") else []
+    ids = [int(str(x)) for x in raw_ids if str(x).isdigit()]
+    if not ids:
+        return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=no_selection", status_code=303)
+
+    moved = 0
+    blocked = 0
+    for txn_id in ids:
+        txn = session.get(BankTxn, txn_id)
+        if not txn:
+            continue
+        has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+        if has_match:
+            blocked += 1
+            continue
+        _clear_unmatched_cashflow_rows(session, txn_id)
+        txn.processing_status = "FACTURE"
+        txn.processing_note = "Orienté vers rapprochement facture / règlement"
+        session.add(txn)
+        moved += 1
+    session.commit()
+    return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=to_facture_bulk&n={moved}&blocked={blocked}", status_code=303)
 
 
 @app.post("/releves/{txn_id}/to_hors_facture")
@@ -2861,6 +3026,7 @@ def releve_to_hors_facture(
         return RedirectResponse("/releves?msg=txn_already_matched", status_code=303)
 
     txn.processing_status = "HORS_FACTURE"
+    txn.processing_note = "À qualifier en flux de trésorerie"
     session.add(txn)
     session.commit()
     return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=to_hors_facture", status_code=303)
@@ -2889,10 +3055,119 @@ async def releves_to_hors_facture_selected(
             blocked += 1
             continue
         txn.processing_status = "HORS_FACTURE"
+        txn.processing_note = "À qualifier en flux de trésorerie"
         session.add(txn)
         moved += 1
     session.commit()
     return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=to_hors_facture_bulk&n={moved}&blocked={blocked}", status_code=303)
+
+
+@app.post("/releves/discard-selected")
+async def releves_discard_selected(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    _ = get_current_user(request, session)
+    form = await request.form()
+    raw_ids = form.getlist("txn_ids") if hasattr(form, "getlist") else []
+    ids = [int(str(x)) for x in raw_ids if str(x).isdigit()]
+    if not ids:
+        return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=no_selection", status_code=303)
+
+    discarded = 0
+    blocked = 0
+    for txn_id in ids:
+        txn = session.get(BankTxn, txn_id)
+        if not txn:
+            continue
+        has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+        if has_match:
+            blocked += 1
+            continue
+        _clear_unmatched_cashflow_rows(session, txn_id)
+        txn.processing_status = "ECARTEE"
+        txn.processing_note = "Écarté du workflow sans suppression"
+        session.add(txn)
+        discarded += 1
+    session.commit()
+    return RedirectResponse(f"{_releves_back_url(request, 'unmatched')}msg=discard_ok&n={discarded}&blocked={blocked}", status_code=303)
+
+
+@app.post("/releves/{txn_id}/delete")
+def releves_delete_txn(
+    txn_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    _ = get_current_user(request, session)
+    txn = session.get(BankTxn, txn_id)
+    if not txn:
+        return RedirectResponse("/releves?msg=bad_txn", status_code=303)
+
+    has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+    if has_match:
+        return RedirectResponse(f"{_releves_back_url(request, 'all')}msg=delete_blocked_matched", status_code=303)
+
+    _clear_unmatched_cashflow_rows(session, txn_id)
+    txn.processing_status = "ECARTEE"
+    txn.processing_note = "Écarté du workflow sans suppression"
+    session.add(txn)
+    session.commit()
+    return RedirectResponse(f"{_releves_back_url(request, 'all')}msg=discard_one_ok", status_code=303)
+
+
+@app.post("/releves/{txn_id}/restore")
+def releves_restore_txn(
+    txn_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    _ = get_current_user(request, session)
+    txn = session.get(BankTxn, txn_id)
+    if not txn:
+        return RedirectResponse("/releves?msg=bad_txn", status_code=303)
+
+    has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+    if has_match:
+        return RedirectResponse(f"{_releves_back_url(request, 'all')}msg=txn_already_matched", status_code=303)
+
+    _clear_unmatched_cashflow_rows(session, txn_id)
+    txn.processing_status = "A_CLASSER"
+    txn.processing_note = "Remis dans la file à classer"
+    session.add(txn)
+    session.commit()
+    return RedirectResponse(f"{_releves_back_url(request, 'all')}msg=restore_ok", status_code=303)
+
+
+@app.post("/releves/delete-selected")
+async def releves_delete_selected(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    _ = get_current_user(request, session)
+    form = await request.form()
+    raw_ids = form.getlist("txn_ids") if hasattr(form, "getlist") else []
+    ids = [int(str(x)) for x in raw_ids if str(x).isdigit()]
+    if not ids:
+        return RedirectResponse(f"{_releves_back_url(request, 'all')}msg=no_selection", status_code=303)
+
+    discarded = 0
+    blocked = 0
+    for txn_id in ids:
+        txn = session.get(BankTxn, txn_id)
+        if not txn:
+            continue
+        has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
+        if has_match:
+            blocked += 1
+            continue
+        _clear_unmatched_cashflow_rows(session, txn_id)
+        txn.processing_status = "ECARTEE"
+        txn.processing_note = "Écarté du workflow sans suppression"
+        session.add(txn)
+        discarded += 1
+    session.commit()
+    return RedirectResponse(f"{_releves_back_url(request, 'all')}msg=discard_ok&n={discarded}&blocked={blocked}", status_code=303)
 
 
 @app.post("/matching/manual")
@@ -3092,61 +3367,6 @@ def matching_auto_apply(request: Request, session: Session = Depends(get_session
 
 
 
-@app.post("/releves/delete-selected")
-async def releves_delete_selected(
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    _ = get_current_user(request, session)
-    form = await request.form()
-    raw_ids = form.getlist("txn_ids") if hasattr(form, "getlist") else []
-    ids = [int(str(x)) for x in raw_ids if str(x).isdigit()]
-    if not ids:
-        return RedirectResponse("/releves?msg=no_selection", status_code=303)
-
-    deleted = 0
-    blocked = 0
-    for txn_id in ids:
-        txn = session.get(BankTxn, txn_id)
-        if not txn:
-            continue
-        has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
-        if has_match:
-            blocked += 1
-            continue
-        # supprimer éventuel classement hors facture lié à ce mouvement
-        cf_rows = session.exec(select(CashflowActual).where(CashflowActual.banktxn_id == txn_id)).all()
-        for cf in cf_rows:
-            session.delete(cf)
-        session.delete(txn)
-        deleted += 1
-    session.commit()
-    return RedirectResponse(f"/releves?msg=delete_ok&n={deleted}&blocked={blocked}", status_code=303)
-
-
-@app.post("/releves/{txn_id}/delete")
-def releves_delete_txn(
-    txn_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    _ = get_current_user(request, session)
-    txn = session.get(BankTxn, txn_id)
-    if not txn:
-        return RedirectResponse("/releves?msg=bad_txn", status_code=303)
-
-    has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
-    if has_match:
-        return RedirectResponse("/releves?msg=delete_blocked_matched", status_code=303)
-
-    cf_rows = session.exec(select(CashflowActual).where(CashflowActual.banktxn_id == txn_id)).all()
-    for cf in cf_rows:
-        session.delete(cf)
-    session.delete(txn)
-    session.commit()
-    return RedirectResponse("/releves?msg=delete_one_ok", status_code=303)
-
-
 @app.post("/releves/{txn_id}/classify")
 def releves_classify_txn(
     txn_id: int,
@@ -3156,7 +3376,7 @@ def releves_classify_txn(
     amount: Optional[str] = Form(None),
 ):
     ref = (request.headers.get("referer") or "")
-    back = "/matching" if "/matching" in ref else "/releves"
+    back = "/qualification" if "/qualification" in ref else ("/matching" if "/matching" in ref else "/releves")
 
     txn = session.get(BankTxn, txn_id)
     if not txn:
@@ -3164,36 +3384,13 @@ def releves_classify_txn(
 
     has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == txn_id)).first()
     if has_match:
-        return RedirectResponse("/matching?msg=txn_already_matched", status_code=303)
-
-    dt = txn.value_date or txn.date
-    month = f"{dt.year:04d}-{dt.month:02d}"
+        return RedirectResponse(f"{back}?msg=txn_already_matched", status_code=303)
 
     amt = _to_float(amount) if amount else None
-    if amt is None:
-        amt = float(txn.debit or 0.0) if float(txn.debit or 0.0) > 0 else float(txn.credit or 0.0)
-
-    existing = session.exec(select(CashflowActual).where(CashflowActual.banktxn_id == txn_id, CashflowActual.invoice_id == None)).first()
-    if existing:
-        existing.rubrique_id = rubrique_id
-        existing.actual_debit_date = dt
-        existing.actual_month = month
-        existing.amount = float(amt)
-        txn.processing_status = "QUALIFIEE"
-        session.add(existing)
-        session.add(txn)
-        session.commit()
-        return RedirectResponse(f"{back}?msg=class_ok", status_code=303)
-
-    cf = CashflowActual(
-        rubrique_id=rubrique_id,
-        invoice_id=None,
-        banktxn_id=txn_id,
-        actual_debit_date=dt,
-        actual_month=month,
-        amount=float(amt),
-    )
-    session.add(cf)
+    _upsert_cashflow_actual_for_txn(session, txn, rubrique_id, amount=amt)
+    txn.processing_status = "QUALIFIEE"
+    txn.processing_note = "Flux qualifié et intégré au budget de trésorerie"
+    session.add(txn)
     session.commit()
     return RedirectResponse(f"{back}?msg=class_ok", status_code=303)
 
@@ -3260,6 +3457,334 @@ def cashflow_reel(request: Request, session: Session = Depends(get_session)):
             "rub_map": rub_map,
         },
     )
+
+
+# ---------------- DASHBOARD V3 ----------------
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_page(request: Request, session: Session = Depends(get_session)):
+    user = get_current_user(request, session)
+
+    invs = session.exec(select(Invoice).order_by(Invoice.legal_due_date.asc().nullslast(), Invoice.invoice_date.asc().nullslast())).all()
+    open_invoices = [i for i in invs if (i.status or "").upper() in ("A_PAYER", "PARTIEL")]
+    total_due = round(sum(_invoice_open_amount(session, i) for i in open_invoices), 2)
+    overdue = [i for i in open_invoices if getattr(i, "legal_due_date", None) and i.legal_due_date.date() < date.today()]
+
+    txns = session.exec(select(BankTxn).limit(2000)).all()
+    processing_map = _banktxn_processing_map(session, txns) if txns else {}
+    counts = {"a_classer": 0, "a_rapprocher": 0, "hors_facture": 0, "qualifies": 0, "rapproches": 0, "ecartees": 0}
+    for t in txns:
+        code = processing_map.get(int(t.id or 0), {}).get("status")
+        if code == "A_CLASSER":
+            counts["a_classer"] += 1
+        elif code == "A_RAPPROCHER":
+            counts["a_rapprocher"] += 1
+        elif code == "HORS_FACTURE":
+            counts["hors_facture"] += 1
+        elif code == "QUALIFIEE":
+            counts["qualifies"] += 1
+        elif code == "RAPPROCHEE":
+            counts["rapproches"] += 1
+        elif code == "ECARTEE":
+            counts["ecartees"] += 1
+
+    month = date.today().strftime("%Y-%m")
+    cash_rows = session.exec(select(CashflowActual).where(CashflowActual.actual_month == month)).all()
+    cash_total = round(sum(float(r.amount or 0.0) for r in cash_rows), 2)
+
+    gl_lines = session.exec(select(GlBalanceLine).where(GlBalanceLine.period_month == month)).all()
+    gl_total = round(sum(float(r.net_amount or 0.0) for r in gl_lines), 2)
+
+    upcoming_invoices = open_invoices[:8]
+    top_invoices = sorted(open_invoices, key=lambda i: _invoice_open_amount(session, i), reverse=True)[:8]
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "user": user,
+            "kpi_invoices": len(open_invoices),
+            "kpi_total_due": f"{total_due:,.2f} MAD".replace(",", " "),
+            "kpi_overdue": len(overdue),
+            "kpi_month_paid": f"{cash_total:,.2f} MAD".replace(",", " "),
+            "upcoming_invoices": upcoming_invoices,
+            "top_invoices": top_invoices,
+            "releve_counts": counts,
+            "gl_month": month,
+            "gl_total": f"{gl_total:,.2f} MAD".replace(",", " "),
+        },
+    )
+
+
+# ---------------- QUALIFICATION HORS FACTURE V3 ----------------
+
+@app.get("/qualification", response_class=HTMLResponse)
+def qualification_page(request: Request, session: Session = Depends(get_session)):
+    user = get_current_user(request, session)
+    status = (request.query_params.get("status") or "open").strip().lower()
+    bank = (request.query_params.get("bank") or "").strip()
+    month = (request.query_params.get("month") or "").strip()
+    msg = request.query_params.get("msg")
+
+    txns = session.exec(select(BankTxn).limit(1500)).all()
+    txns = sorted(txns, key=lambda t: (_txn_effective_date(t), getattr(t, "id", 0) or 0), reverse=True)
+    processing_map = _banktxn_processing_map(session, txns) if txns else {}
+    rubs = session.exec(select(CashflowRubrique).order_by(CashflowRubrique.rubrique.asc())).all()
+    rub_map = {int(r.id): r for r in rubs if r.id is not None}
+
+    cf_rows = session.exec(select(CashflowActual).where(CashflowActual.invoice_id == None)).all()
+    cf_map = {int(r.banktxn_id): r for r in cf_rows if r.banktxn_id is not None}
+
+    filtered = []
+    for t in txns:
+        code = processing_map.get(int(t.id or 0), {}).get("status")
+        if status == "open" and code != "HORS_FACTURE":
+            continue
+        if status == "qualified" and code != "QUALIFIEE":
+            continue
+        if status == "all" and code not in ("HORS_FACTURE", "QUALIFIEE"):
+            continue
+        if bank and (t.bank_name or "").strip() != bank:
+            continue
+        if month and _txn_month(t) != month:
+            continue
+        filtered.append(t)
+
+    banks = sorted({(t.bank_name or "").strip() for t in txns if (t.bank_name or "").strip()})
+    months = sorted({_txn_month(t) for t in txns if _txn_month(t)}, reverse=True)
+
+    counts = {
+        "open": len([t for t in txns if processing_map.get(int(t.id or 0), {}).get("status") == "HORS_FACTURE"]),
+        "qualified": len([t for t in txns if processing_map.get(int(t.id or 0), {}).get("status") == "QUALIFIEE"]),
+    }
+
+    return templates.TemplateResponse(
+        "qualification.html",
+        {
+            "request": request,
+            "user": user,
+            "txns": filtered,
+            "processing_map": processing_map,
+            "rubs": rubs,
+            "rub_map": rub_map,
+            "cf_map": cf_map,
+            "status": status,
+            "bank": bank,
+            "month": month,
+            "banks": banks,
+            "months": months,
+            "counts": counts,
+            "msg": msg,
+        },
+    )
+
+
+def _norm_col_name(value: str) -> str:
+    return _norm_label(value or "").replace(" ", "_").lower()
+
+
+def _parse_gl_balance_rows_from_file(content: bytes, filename: str) -> list[dict]:
+    fname = (filename or "").lower()
+    rows: list[dict] = []
+
+    def _row_to_dict(mapping: dict) -> Optional[dict]:
+        norm = {_norm_col_name(str(k)): v for k, v in mapping.items()}
+        account = norm.get("compte") or norm.get("account") or norm.get("numero_compte") or norm.get("n_compte") or norm.get("code")
+        if account is None or str(account).strip() == "":
+            return None
+        label = norm.get("libelle") or norm.get("intitule") or norm.get("account_label") or norm.get("label")
+        debit = _to_float(norm.get("debit") or norm.get("debits") or norm.get("debit_mad")) or 0.0
+        credit = _to_float(norm.get("credit") or norm.get("credits") or norm.get("credit_mad")) or 0.0
+        net = _to_float(norm.get("net") or norm.get("solde") or norm.get("solde_net") or norm.get("montant"))
+        if net is None:
+            net = float(debit or 0.0) - float(credit or 0.0)
+        return {
+            "gl_account": str(account).strip()[:20],
+            "account_label": (str(label).strip()[:160] if label is not None else None),
+            "debit": float(debit or 0.0),
+            "credit": float(credit or 0.0),
+            "net_amount": float(net or 0.0),
+        }
+
+    if fname.endswith(".csv"):
+        raw = content.decode("utf-8-sig", errors="ignore")
+        sample = raw[:2048]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,	,")
+            delim = dialect.delimiter
+        except Exception:
+            delim = ";" if sample.count(";") >= sample.count(",") else ","
+        reader = csv.DictReader(raw.splitlines(), delimiter=delim)
+        for row in reader:
+            parsed = _row_to_dict(row)
+            if parsed:
+                rows.append(parsed)
+        return rows
+
+    wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
+    ws = wb.active
+    headers = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        mapping = {headers[i]: row[i] for i in range(min(len(headers), len(row)))}
+        parsed = _row_to_dict(mapping)
+        if parsed:
+            rows.append(parsed)
+    return rows
+
+
+@app.post("/qualification/auto_apply")
+def qualification_auto_apply(
+    request: Request,
+    session: Session = Depends(get_session),
+    limit: str = Form("50"),
+):
+    _ = get_current_user(request, session)
+    try:
+        limit_int = max(1, min(int(str(limit or "50")), 500))
+    except Exception:
+        limit_int = 50
+
+    txns = session.exec(
+        select(BankTxn)
+        .where(BankTxn.processing_status == "HORS_FACTURE")
+        .order_by(BankTxn.value_date.desc().nullslast(), BankTxn.date.desc(), BankTxn.id.desc())
+        .limit(limit_int)
+    ).all()
+    rubs = session.exec(select(CashflowRubrique).order_by(CashflowRubrique.rubrique.asc())).all()
+
+    applied = 0
+    for txn in txns:
+        has_match = session.exec(select(InvoicePaymentMatch).where(InvoicePaymentMatch.banktxn_id == int(txn.id or 0))).first()
+        if has_match:
+            continue
+        guess = _guess_rubrique_for_txn(txn, rubs)
+        if not guess or guess.id is None:
+            continue
+        _upsert_cashflow_actual_for_txn(session, txn, int(guess.id))
+        txn.processing_status = "QUALIFIEE"
+        txn.processing_note = f"Qualification automatique: {guess.rubrique}"
+        session.add(txn)
+        applied += 1
+    session.commit()
+    return RedirectResponse(f"/qualification?status=open&msg=auto_qualified_{applied}", status_code=303)
+
+
+@app.get("/budget-comptable", response_class=HTMLResponse)
+def budget_comptable_page(request: Request, session: Session = Depends(get_session)):
+    user = get_current_user(request, session)
+    month = (request.query_params.get("month") or date.today().strftime("%Y-%m")).strip()
+    msg = request.query_params.get("msg")
+
+    gl_rows = session.exec(
+        select(GlBalanceLine).where(GlBalanceLine.period_month == month).order_by(GlBalanceLine.gl_account.asc())
+    ).all()
+    targets = session.exec(
+        select(GlBudgetTarget).where(GlBudgetTarget.period_month == month).order_by(GlBudgetTarget.gl_account.asc())
+    ).all()
+    target_map = {t.gl_account: t for t in targets}
+
+    rows = []
+    for gl in gl_rows:
+        target = target_map.get(gl.gl_account)
+        budget_amount = float(getattr(target, "budget_amount", 0.0) or 0.0)
+        actual = float(gl.net_amount or 0.0)
+        rows.append({
+            "gl_account": gl.gl_account,
+            "account_label": gl.account_label,
+            "actual": actual,
+            "budget": budget_amount,
+            "variance": actual - budget_amount,
+            "budget_group": getattr(target, "budget_group", None),
+        })
+
+    months = sorted({r.period_month for r in session.exec(select(GlBalanceLine)).all() if r.period_month}, reverse=True)
+    total_actual = round(sum(r["actual"] for r in rows), 2)
+    total_budget = round(sum(r["budget"] for r in rows), 2)
+
+    return templates.TemplateResponse(
+        "budget_comptable.html",
+        {
+            "request": request,
+            "user": user,
+            "month": month,
+            "months": months,
+            "rows": rows,
+            "msg": msg,
+            "total_actual": total_actual,
+            "total_budget": total_budget,
+            "variance": round(total_actual - total_budget, 2),
+        },
+    )
+
+
+@app.post("/budget-comptable/import")
+async def budget_comptable_import(
+    request: Request,
+    session: Session = Depends(get_session),
+    period_month: str = Form(...),
+    replace_existing: Optional[str] = Form("1"),
+    file: UploadFile = File(...),
+):
+    _ = get_current_user(request, session)
+    filename = file.filename or "balance"
+    if not filename.lower().endswith((".csv", ".xlsx", ".xls")):
+        return RedirectResponse(f"/budget-comptable?month={period_month}&msg=bad_format", status_code=303)
+    content = await file.read()
+    if not content:
+        return RedirectResponse(f"/budget-comptable?month={period_month}&msg=empty", status_code=303)
+    try:
+        parsed = _parse_gl_balance_rows_from_file(content, filename)
+    except Exception:
+        return RedirectResponse(f"/budget-comptable?month={period_month}&msg=parse_error", status_code=303)
+
+    if replace_existing == "1":
+        existing = session.exec(select(GlBalanceLine).where(GlBalanceLine.period_month == period_month)).all()
+        for row in existing:
+            session.delete(row)
+
+    inserted = 0
+    for row in parsed:
+        session.add(GlBalanceLine(
+            period_month=period_month,
+            gl_account=row["gl_account"],
+            account_label=row.get("account_label"),
+            debit=float(row.get("debit") or 0.0),
+            credit=float(row.get("credit") or 0.0),
+            net_amount=float(row.get("net_amount") or 0.0),
+            source_filename=filename[:255],
+        ))
+        inserted += 1
+    session.commit()
+    return RedirectResponse(f"/budget-comptable?month={period_month}&msg=import_ok&n={inserted}", status_code=303)
+
+
+@app.post("/budget-comptable/target")
+def budget_comptable_target_upsert(
+    request: Request,
+    session: Session = Depends(get_session),
+    period_month: str = Form(...),
+    gl_account: str = Form(...),
+    account_label: Optional[str] = Form(None),
+    budget_amount: float = Form(...),
+    budget_group: Optional[str] = Form(None),
+):
+    _ = get_current_user(request, session)
+    existing = session.exec(select(GlBudgetTarget).where(GlBudgetTarget.period_month == period_month, GlBudgetTarget.gl_account == gl_account)).first()
+    if existing:
+        existing.account_label = (account_label or existing.account_label)
+        existing.budget_amount = float(budget_amount or 0.0)
+        existing.budget_group = budget_group
+        session.add(existing)
+    else:
+        session.add(GlBudgetTarget(
+            period_month=period_month,
+            gl_account=gl_account.strip()[:20],
+            account_label=(account_label or None),
+            budget_amount=float(budget_amount or 0.0),
+            budget_group=(budget_group or None),
+        ))
+    session.commit()
+    return RedirectResponse(f"/budget-comptable?month={period_month}&msg=target_saved", status_code=303)
 
 
 # ---------------- PLANNING PAIEMENT (séparé) ----------------
@@ -3738,6 +4263,22 @@ def delais_page(request: Request, session: Session = Depends(get_session)):
         .limit(300)
     ).all()
 
+    payment_batch_by_invoice: dict[int, PaymentBatch] = {}
+    if rows:
+        invoice_ids = [int(r.id) for r in rows if r.id is not None]
+        lines = session.exec(select(PaymentLine).where(PaymentLine.invoice_id.in_(invoice_ids))).all()
+        batch_ids = sorted({int(ln.batch_id) for ln in lines if ln.batch_id is not None})
+        batch_map = {int(b.id): b for b in session.exec(select(PaymentBatch).where(PaymentBatch.id.in_(batch_ids))).all()} if batch_ids else {}
+        for ln in lines:
+            if ln.invoice_id is None:
+                continue
+            batch = batch_map.get(int(ln.batch_id))
+            if not batch:
+                continue
+            current = payment_batch_by_invoice.get(int(ln.invoice_id))
+            if current is None or int(batch.id or 0) > int(current.id or 0):
+                payment_batch_by_invoice[int(ln.invoice_id)] = batch
+
     today = datetime.utcnow().date()
     kpi_total = 0.0
     kpi_late_amt = 0.0
@@ -3771,6 +4312,8 @@ def delais_page(request: Request, session: Session = Depends(get_session)):
             "kpi_late_cnt": kpi_late_cnt,
             "kpi_missing_due": kpi_missing_due,
             "kpi_missing_supplier": kpi_missing_supplier,
+            "payment_batch_by_invoice": payment_batch_by_invoice,
+            "payment_type_label": _payment_type_label,
         },
     )
 
@@ -5834,7 +6377,7 @@ def reglements_page(request: Request, session: Session = Depends(get_session)):
 
     return templates.TemplateResponse(
         "reglements.html",
-        {"request": request, "user": user, "batches": batches, "accs": accs, "today": datetime.utcnow().date().isoformat()},
+        {"request": request, "user": user, "batches": batches, "accs": accs, "today": datetime.utcnow().date().isoformat(), "payment_type_label": _payment_type_label},
     )
 
 
@@ -5920,6 +6463,9 @@ def reglements_create(
     session: Session = Depends(get_session),
     account_id: int = Form(...),
     payment_date: Optional[str] = Form(None),
+    payment_type: str = Form("VIREMENT"),
+    instrument_ref: Optional[str] = Form(None),
+    note: Optional[str] = Form(None),
 ):
     acc = session.get(CompanyBankAccount, account_id)
     if not acc or not acc.is_active:
@@ -5935,6 +6481,9 @@ def reglements_create(
         debit_account=(acc.account_no or "").strip()[:80],
         payment_date=dt,
         total_amount=0.0,
+        payment_type=(payment_type or "VIREMENT").strip().upper()[:20],
+        instrument_ref=((instrument_ref or "").strip()[:80] or None),
+        note=((note or "").strip()[:200] or None),
         status="DRAFT",
     )
     session.add(b)
@@ -5951,6 +6500,8 @@ def reglements_create_from_invoice(
     account_id: int = Form(...),
     payment_date: Optional[str] = Form(None),
     amount: Optional[str] = Form(None),
+    payment_type: str = Form("VIREMENT"),
+    instrument_ref: Optional[str] = Form(None),
 ):
     """Crée un ordre de virement (PaymentBatch) depuis le planning, puis ajoute la ligne."""
     acc = session.get(CompanyBankAccount, account_id)
@@ -5971,6 +6522,9 @@ def reglements_create_from_invoice(
         debit_account=(acc.account_no or "").strip()[:80],
         payment_date=dt,
         total_amount=0.0,
+        payment_type=(payment_type or "VIREMENT").strip().upper()[:20],
+        instrument_ref=((instrument_ref or "").strip()[:80] or None),
+        note=None,
         status="DRAFT",
     )
     session.add(b)
@@ -6005,7 +6559,7 @@ def reglement_detail(batch_id: int, request: Request, session: Session = Depends
     invs = session.exec(select(Invoice).where(Invoice.status == "A_PAYER").order_by(Invoice.id.desc()).limit(500)).all()
     invs = [i for i in invs if (i.id not in inv_map)]
 
-    return templates.TemplateResponse("reglement_detail.html", {"request": request, "user": user, "batch": batch, "lines": lines, "invs": invs, "inv_map": inv_map})
+    return templates.TemplateResponse("reglement_detail.html", {"request": request, "user": user, "batch": batch, "lines": lines, "invs": invs, "inv_map": inv_map, "payment_type_label": _payment_type_label})
 
 
 @app.post("/reglements/{batch_id}/add_line")

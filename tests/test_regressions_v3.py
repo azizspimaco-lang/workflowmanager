@@ -99,7 +99,7 @@ class AppRegressionV3Tests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertIn("missing_invoice", response.headers.get("location", ""))
 
-    def test_delete_selected_removes_multiple_unmatched_rows(self):
+    def test_delete_selected_soft_discards_multiple_unmatched_rows(self):
         txn1 = self._create_txn(label=self._uniq("FRAIS TENUE"), debit=10.0)
         txn2 = self._create_txn(label=self._uniq("COMMISSION"), debit=20.0)
 
@@ -110,11 +110,50 @@ class AppRegressionV3Tests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn("msg=delete_ok", response.headers.get("location", ""))
+        self.assertIn("msg=discard_ok", response.headers.get("location", ""))
 
         with Session(self.main.engine) as session:
-            self.assertIsNone(session.get(self.main.BankTxn, txn1))
-            self.assertIsNone(session.get(self.main.BankTxn, txn2))
+            row1 = session.get(self.main.BankTxn, txn1)
+            row2 = session.get(self.main.BankTxn, txn2)
+            self.assertIsNotNone(row1)
+            self.assertIsNotNone(row2)
+            self.assertEqual(row1.processing_status, "ECARTEE")
+            self.assertEqual(row2.processing_status, "ECARTEE")
+
+    def test_qualification_page_loads_hors_facture_rows(self):
+        txn_id = self._create_txn(label=self._uniq("FRAIS BANCAIRES"), debit=30.0)
+        response = self.client.post(
+            f"/releves/{txn_id}/to_hors_facture",
+            headers={"referer": "http://testserver/releves?view=unmatched"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303)
+
+        page = self.client.get("/qualification?status=open")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Qualification des flux hors facture", page.text)
+
+    def test_budget_comptable_import_csv(self):
+        csv_content = (
+            "Compte;Libellé;Débit;Crédit\n"
+            "611100;Achats matières;1500,00;0,00\n"
+            "712000;Ventes;0,00;4200,00\n"
+        ).encode("utf-8")
+
+        response = self.client.post(
+            "/budget-comptable/import",
+            data={"period_month": "2026-02", "replace_existing": "1"},
+            files={"file": ("balance.csv", io.BytesIO(csv_content), "text/csv")},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("msg=import_ok", response.headers.get("location", ""))
+
+        with Session(self.main.engine) as session:
+            rows = session.exec(
+                select(self.main.GlBalanceLine).where(self.main.GlBalanceLine.period_month == "2026-02")
+            ).all()
+            self.assertEqual(len(rows), 2)
 
     def test_auto_apply_matches_high_confidence_pair(self):
         txn_id = self._create_txn(

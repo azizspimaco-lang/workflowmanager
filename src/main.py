@@ -6360,6 +6360,223 @@ async def suppliers_upsert(
 
 
 
+@app.get("/suppliers/template_import")
+def suppliers_download_template():
+    """Télécharger le template Excel d'import fournisseurs."""
+    import pathlib as _pl
+
+    # Cherche le template à côté du projet ou dans le répertoire courant
+    candidates = [
+        _pl.Path(__file__).parent.parent / "template_import_fournisseurs.xlsx",
+        _pl.Path(__file__).parent / "template_import_fournisseurs.xlsx",
+        _pl.Path("template_import_fournisseurs.xlsx"),
+    ]
+    tpl_path = None
+    for c in candidates:
+        if c.exists():
+            tpl_path = c
+            break
+
+    if tpl_path:
+        data = tpl_path.read_bytes()
+    else:
+        # Génère à la volée si le fichier n'est pas trouvé
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        wb2 = Workbook()
+        ws2 = wb2.active
+        ws2.title = "Fournisseurs"
+        hdr_fill = PatternFill("solid", fgColor="1E2A3A")
+        hdr_font = Font(bold=True, color="FFFFFF", size=10)
+        cols = ["Nom Fournisseur *", "ICE", "IF", "RC", "Ville RC",
+                "Adresse", "Pays (code) *", "Banque", "Agence",
+                "RIB / IBAN *", "SWIFT", "Type compte", "Type fournisseur *", "Notes"]
+        widths = [38, 18, 14, 14, 16, 30, 14, 18, 18, 36, 16, 14, 18, 28]
+        from openpyxl.utils import get_column_letter as _gcl
+        for i, (c, w) in enumerate(zip(cols, widths)):
+            cl = _gcl(i + 1)
+            cell = ws2[f"{cl}1"]
+            cell.value = c
+            cell.fill = hdr_fill
+            cell.font = hdr_font
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            ws2.column_dimensions[cl].width = w
+        ws2.row_dimensions[1].height = 30
+        buf = BytesIO()
+        wb2.save(buf)
+        data = buf.getvalue()
+
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=template_import_fournisseurs.xlsx"},
+    )
+
+
+@app.post("/suppliers/import")
+async def suppliers_import(
+    request: Request,
+    session: Session = Depends(get_session),
+    file: UploadFile = File(...),
+):
+    """Import en masse de fournisseurs + comptes bancaires depuis un fichier Excel."""
+    _ = get_current_user(request, session)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Fichier vide.")
+
+    try:
+        wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Impossible de lire le fichier Excel : {exc}")
+
+    # Cherche l'onglet "Fournisseurs" ou prend le premier
+    if "Fournisseurs" in wb.sheetnames:
+        ws = wb["Fournisseurs"]
+    else:
+        ws = wb.active
+
+    # Colonnes attendues (index 0-based) — correspondance avec le template
+    # A=0  B=1  C=2  D=3  E=4  F=5  G=6  H=7  I=8  J=9  K=10  L=11  M=12  N=13
+    COL_NAME    = 0
+    COL_ICE     = 1
+    COL_IF      = 2
+    COL_RC      = 3
+    COL_RC_CITY = 4
+    COL_ADDR    = 5
+    COL_COUNTRY = 6
+    COL_BANK    = 7
+    COL_AGENCY  = 8
+    COL_RIB     = 9
+    COL_SWIFT   = 10
+    # COL_TYPE_ACC= 11  (informatif, non utilisé)
+    COL_FOREIGN = 12
+    # COL_NOTES  = 13  (informatif)
+
+    def _cell(row, col):
+        try:
+            v = row[col].value
+            return str(v).strip() if v is not None else ""
+        except Exception:
+            return ""
+
+    created_sup = 0
+    updated_sup = 0
+    created_acc = 0
+    errors: list[str] = []
+
+    DATA_START = 6  # ligne 6 dans le template (1-indexed)
+
+    rows = list(ws.iter_rows(min_row=DATA_START))
+
+    for r_idx, row in enumerate(rows):
+        line_no = DATA_START + r_idx
+
+        name_raw = _cell(row, COL_NAME)
+        if not name_raw:
+            continue  # ligne vide
+
+        name_clean = name_raw[:200]
+        ice_clean  = _cell(row, COL_ICE)[:30] or None
+        if_clean   = _cell(row, COL_IF)[:30] or None
+        rc_clean   = _cell(row, COL_RC)[:30] or None
+        rc_city    = _cell(row, COL_RC_CITY)[:60] or None
+        addr_clean = _cell(row, COL_ADDR)[:250] or None
+
+        country_raw = _cell(row, COL_COUNTRY).upper()[:2]
+        country_code = country_raw if country_raw else "MA"
+
+        foreign_raw = _cell(row, COL_FOREIGN).lower()
+        is_foreign = foreign_raw in ("etranger", "étranger", "foreign", "1", "true", "oui")
+
+        bank_name   = _cell(row, COL_BANK)[:80] or None
+        agency_name = _cell(row, COL_AGENCY)[:80] or None
+        rib_raw     = _cell(row, COL_RIB)[:50] or None
+        swift_raw   = _cell(row, COL_SWIFT)[:20] or None
+
+        # ─ Upsert supplier ─
+        sup = None
+        try:
+            if ice_clean:
+                sup = session.exec(select(Supplier).where(Supplier.ice == ice_clean)).first()
+            if not sup and name_clean:
+                sup = session.exec(select(Supplier).where(Supplier.name == name_clean)).first()
+
+            if not sup:
+                sup = Supplier(
+                    name=name_clean,
+                    ice=ice_clean,
+                    if_code=if_clean,
+                    rc=rc_clean,
+                    rc_city=rc_city,
+                    address=addr_clean,
+                    is_foreign=is_foreign,
+                    country_code=country_code,
+                )
+                session.add(sup)
+                session.flush()
+                created_sup += 1
+            else:
+                sup.name = name_clean
+                if ice_clean:
+                    sup.ice = ice_clean
+                if if_clean:
+                    sup.if_code = if_clean
+                if rc_clean:
+                    sup.rc = rc_clean
+                if rc_city:
+                    sup.rc_city = rc_city
+                if addr_clean:
+                    sup.address = addr_clean
+                sup.is_foreign = is_foreign
+                sup.country_code = country_code
+                session.add(sup)
+                session.flush()
+                updated_sup += 1
+
+        except Exception as exc:
+            errors.append(f"Ligne {line_no} [{name_clean}] — Fournisseur : {exc}")
+            session.rollback()
+            continue
+
+        # ─ Compte bancaire (si RIB/IBAN présent) ─
+        if rib_raw:
+            try:
+                # Éviter les doublons exacts sur même fournisseur
+                existing_acc = session.exec(
+                    select(SupplierBankAccount).where(
+                        SupplierBankAccount.supplier_id == sup.id,
+                        SupplierBankAccount.rib_or_iban == rib_raw,
+                    )
+                ).first()
+                if not existing_acc:
+                    acc = SupplierBankAccount(
+                        supplier_id=sup.id,
+                        bank_name=bank_name,
+                        agency_name=agency_name,
+                        rib_or_iban=rib_raw,
+                        swift=swift_raw,
+                    )
+                    session.add(acc)
+                    created_acc += 1
+            except Exception as exc:
+                errors.append(f"Ligne {line_no} [{name_clean}] — Compte bancaire : {exc}")
+
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la sauvegarde : {exc}")
+
+    from urllib.parse import quote as _quote
+    msg = f"Import OK — {created_sup} fournisseurs créés, {updated_sup} mis à jour, {created_acc} comptes bancaires ajoutés."
+    if errors:
+        msg += f" ⚠️ {len(errors)} erreur(s) : " + " | ".join(errors[:5])
+
+    return RedirectResponse(f"/suppliers?toast={_quote(msg)}", status_code=303)
+
+
 @app.post("/suppliers/accounts/{acc_id}/delete")
 def supplier_account_delete(acc_id: int, request: Request, session: Session = Depends(get_session)):
     _ = get_current_user(request, session)
